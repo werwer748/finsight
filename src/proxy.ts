@@ -1,9 +1,26 @@
-import type { NextRequest, NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
+import { resolveAuthRedirect } from "@/lib/auth/routes";
 import { updateSession } from "@/lib/supabase/update-session";
 
 export async function proxy(request: NextRequest): Promise<NextResponse> {
-  const { response } = await updateSession(request);
-  return response;
+  const { response, isAuthenticated } = await updateSession(request);
+
+  const redirectPath = resolveAuthRedirect(
+    request.nextUrl.pathname,
+    isAuthenticated,
+  );
+  if (!redirectPath) {
+    return response;
+  }
+
+  const redirectResponse = NextResponse.redirect(
+    new URL(redirectPath, request.url),
+  );
+  // 갱신된 세션 쿠키를 옮기지 않으면 브라우저에 저장되지 않아 사용자가 로그아웃된다.
+  response.cookies
+    .getAll()
+    .forEach((cookie) => redirectResponse.cookies.set(cookie));
+  return redirectResponse;
 }
 
 export const config = {
