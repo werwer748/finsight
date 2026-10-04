@@ -21,7 +21,9 @@
     {
       "step": 2,
       "name": "landing",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-04T20:43:54+0900",
+      "summary": "랜딩 페이지(/)를 헤더·히어로·푸터로 구성. src/components/landing/header.tsx(LandingHeader — FinSight 홈 링크, 로그인 → /login, 시작하기 → /signup), hero.tsx(Hero — 페이지의 유일한 h1, 설명, 무료로 시작하기 ButtonLink lg → /signup, 로그인 링크 → /login), footer.tsx(LandingFooter — © 연도 FinSight, 연도는 new Date()). 셋 다 props 없는 동기 서버 컴포넌트이고 테스트는 같은 폴더의 header/hero/footer.test.tsx. src/app/page.tsx는 <LandingHeader /> + <main className=\"flex-1\"><Hero /></main> + <LandingFooter /> 조합만 하며 page.test.tsx를 히어로 제목 기준으로 갱신. /login, /signup 페이지는 아직 없어 링크는 404(step 4 범위)."
     },
     {
       "step": 3,

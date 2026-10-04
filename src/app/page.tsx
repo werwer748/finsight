@@ -1,7 +1,15 @@
+import { LandingFooter } from "@/components/landing/footer";
+import { LandingHeader } from "@/components/landing/header";
+import { Hero } from "@/components/landing/hero";
+
 export default function Home() {
   return (
-    <main>
-      <h1>FinSight</h1>
-    </main>
+    <>
+      <LandingHeader />
+      <main className="flex-1">
+        <Hero />
+      </main>
+      <LandingFooter />
+    </>
   );
 }
