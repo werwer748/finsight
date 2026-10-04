@@ -1,1 +1,27 @@
 @import "tailwindcss";
+
+@theme {
+  --color-background: #ffffff;
+  --color-surface: #f9fafb;
+  --color-foreground: #111827;
+  --color-muted: #6b7280;
+  --color-border: #e5e7eb;
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-danger: #dc2626;
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard",
+    "Noto Sans KR", "Segoe UI", sans-serif;
+
+  /* 버튼, 입력, 카드가 함께 쓰는 모서리 반경 (rounded-base) */
+  --radius-base: 0.75rem;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+}

@@ -13,7 +13,9 @@
     {
       "step": 1,
       "name": "ui-foundation",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-04T20:40:45+0900",
+      "summary": "디자인 토큰을 src/app/globals.css의 @theme에 정의(--color-background, --color-surface, --color-foreground, --color-muted, --color-border, --color-primary, --color-primary-hover, --color-danger, --font-sans 시스템 폰트 스택, --radius-base 0.75rem → rounded-base)하고 body에 배경·글자색·폰트 적용. 공용 컴포넌트는 src/components/ui/button.tsx(Button, ButtonLink — variant primary|secondary|ghost, size md|lg, fullWidth), src/components/ui/input.tsx(Input — label 필수, error 시 aria-invalid·aria-describedby), src/components/ui/card.tsx(Card). 셋 다 'use client' 없이 서버·클라이언트 컴포넌트 양쪽에서 쓸 수 있고, 테스트는 같은 폴더의 button/input/card.test.tsx."
     },
     {
       "step": 2,
