@@ -7,7 +7,8 @@
       "name": "project-setup",
       "status": "completed",
       "started_at": "2026-10-04T20:37:00+0900",
-      "summary": "Next.js 16.3.8(App Router, TS strict, Tailwind 4, src/, @/* alias, npm) 뼈대와 Vitest 5.0.3 + Testing Library 테스트 환경 구성. 테스트 설정은 vitest.config.ts(jsdom, globals, @ alias)와 vitest.setup.ts(jest-dom), 첫 테스트는 src/app/page.test.tsx. Vitest 5 peer 요구로 @types/node만 ^20에서 ^24로 올림. .env.example 추가, .gitignore 병합."
+      "summary": "Next.js 16.3.8(App Router, TS strict, Tailwind 4, src/, @/* alias, npm) 뼈대와 Vitest 5.0.3 + Testing Library 테스트 환경 구성. 테스트 설정은 vitest.config.ts(jsdom, globals, @ alias)와 vitest.setup.ts(jest-dom), 첫 테스트는 src/app/page.test.tsx. Vitest 5 peer 요구로 @types/node만 ^20에서 ^24로 올림. .env.example 추가, .gitignore 병합.",
+      "completed_at": "2026-10-04T20:40:45+0900"
     },
     {
       "step": 1,
