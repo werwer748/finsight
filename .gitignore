@@ -3,6 +3,7 @@ node_modules/
 out/
 next-env.d.ts
 tsconfig.tsbuildinfo
+__pycache__/
 
 # phase execution outputs
 phases/**/phase*-output.json
