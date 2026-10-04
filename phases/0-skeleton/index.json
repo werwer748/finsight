@@ -37,7 +37,9 @@
     {
       "step": 4,
       "name": "auth-flow",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-04T20:51:30+0900",
+      "summary": "이메일·비밀번호 가입/로그인/로그아웃 흐름 추가. 타입은 src/types/auth.ts(AuthFormState). 검증은 src/lib/auth/validation.ts(validateEmail, validatePassword — 8자 이상, validatePasswordConfirm — 통과 시 null, 실패 시 한국어 문구), 오류 변환은 src/lib/auth/errors.ts(toAuthErrorMessage — Supabase error.code를 한국어 문구로, 모르는 코드는 기본 문구). 서버 액션은 src/lib/auth/actions.ts('use server')의 signUp(prev, formData), signIn(prev, formData), signOut() — signUp은 검증 실패 시 Supabase 호출 없이 errors를 돌려주고, 통과하면 요청의 origin 헤더 + /auth/confirm 을 emailRedirectTo로 넘겨 응답에 세션이 있으면 /dashboard 로 리다이렉트, 없으면 success와 확인 메일 안내를 돌려줌. signIn은 성공 시 /dashboard 리다이렉트, 실패 시 message에 한국어 문구. signOut은 로그아웃 후 / 로 리다이렉트하며 아직 호출하는 UI는 없음(step 5에서 연결). 이메일 확인 콜백은 src/app/auth/confirm/route.ts(GET /auth/confirm — token_hash+type이면 verifyOtp, code면 exchangeCodeForSession, 성공 시 /dashboard, 실패·쿼리 없음은 /login?notice=confirm-failed). 화면은 src/components/auth/signup-form.tsx(SignupForm), login-form.tsx(LoginForm({ notice })) — 'use client', useActionState로 액션에 연결, 필드 name은 email·password·passwordConfirm, noValidate로 서버 오류 문구만 표시, React가 액션 뒤 비제어 입력을 비우므로 이메일만 제어 입력으로 유지. 페이지는 src/app/signup/page.tsx(/signup), src/app/login/page.tsx(/login, searchParams의 notice 전달)이고 가운데 정렬 Card 안에 FinSight 홈 링크·h1·폼을 둠. /dashboard 페이지와 경로 보호는 없음(step 5 범위). 테스트는 구현 파일 옆의 validation/errors/actions.test.ts, route.test.ts, signup-form/login-form.test.tsx이며 @/lib/supabase/server, next/navigation, next/headers를(폼 테스트는 @/lib/auth/actions를) mock으로 대체. 새 환경변수와 패키지는 없음."
     },
     {
       "step": 5,
