@@ -2,11 +2,38 @@
   "project": "FinSight",
   "phase": "0-skeleton",
   "steps": [
-    { "step": 0, "name": "project-setup", "status": "pending" },
-    { "step": 1, "name": "ui-foundation", "status": "pending" },
-    { "step": 2, "name": "landing", "status": "pending" },
-    { "step": 3, "name": "supabase-client", "status": "pending" },
-    { "step": 4, "name": "auth-flow", "status": "pending" },
-    { "step": 5, "name": "dashboard-shell", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "project-setup",
+      "status": "completed",
+      "started_at": "2026-10-04T20:37:00+0900",
+      "summary": "Next.js 16.3.8(App Router, TS strict, Tailwind 4, src/, @/* alias, npm) 뼈대와 Vitest 5.0.3 + Testing Library 테스트 환경 구성. 테스트 설정은 vitest.config.ts(jsdom, globals, @ alias)와 vitest.setup.ts(jest-dom), 첫 테스트는 src/app/page.test.tsx. Vitest 5 peer 요구로 @types/node만 ^20에서 ^24로 올림. .env.example 추가, .gitignore 병합."
+    },
+    {
+      "step": 1,
+      "name": "ui-foundation",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "landing",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "supabase-client",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "auth-flow",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "dashboard-shell",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-10-04T20:37:00+0900"
 }
