@@ -7,14 +7,16 @@ stdin으로 훅 입력(JSON)을 받아, 차단해야 하면 stderr에 사유를 
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 GUARDED_DIRS = ("src/lib/", "src/services/", "src/app/api/", "src/components/")
 CODE_EXTS = (".ts", ".tsx")
 TEST_EXTS = (".test.ts", ".test.tsx")
+PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$", re.MULTILINE)
 
 
 def _changed_since_commit(path: Path, root: Path) -> bool:
@@ -57,17 +59,27 @@ def check(file_path: str, root: Path) -> Optional[str]:
     return None
 
 
+def target_paths(payload: dict) -> List[str]:
+    """고치려는 파일 경로들. Claude Code의 Write·Edit은 file_path를, Codex의 apply_patch는 패치 본문을 준다."""
+    tool_input = payload.get("tool_input", {})
+    if tool_input.get("file_path"):
+        return [tool_input["file_path"]]
+    cwd = payload.get("cwd", "")
+    return [os.path.join(cwd, p.strip()) for p in PATCH_FILE.findall(tool_input.get("command") or "")]
+
+
 def main():
     payload = json.load(sys.stdin)
-    file_path = payload.get("tool_input", {}).get("file_path")
-    if not file_path:
+    paths = target_paths(payload)
+    if not paths:
         return
 
     root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload["cwd"])
-    message = check(file_path, root)
-    if message:
-        print(message, file=sys.stderr)
-        sys.exit(2)
+    for file_path in paths:
+        message = check(file_path, root)
+        if message:
+            print(message, file=sys.stderr)
+            sys.exit(2)
 
 
 if __name__ == "__main__":

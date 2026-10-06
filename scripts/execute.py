@@ -54,6 +54,8 @@ class StepExecutor:
     """Phase 디렉토리 안의 step들을 순차 실행하는 하네스."""
 
     MAX_RETRIES = 3
+    CODEX_TIMEOUT = 1800
+    TIMEOUT_EXIT_CODE = 124  # timeout(1)이 쓰는 종료 코드
     FEAT_MSG = "feat({phase}): step {num} — {name}"
     CHORE_MSG = "chore({phase}): step {num} output"
     TZ = timezone(timedelta(hours=9))
@@ -224,9 +226,9 @@ class StepExecutor:
             f"   {commit_example}\n\n---\n\n"
         )
 
-    # --- Claude 호출 ---
+    # --- Codex 호출 ---
 
-    def _invoke_claude(self, step: dict, preamble: str) -> dict:
+    def _invoke_codex(self, step: dict, preamble: str) -> dict:
         step_num, step_name = step["step"], step["name"]
         step_file = self._phase_dir / f"step{step_num}.md"
 
@@ -235,26 +237,50 @@ class StepExecutor:
             sys.exit(1)
 
         prompt = preamble + step_file.read_text()
-        result = subprocess.run(
-            ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json", prompt],
-            cwd=self._root, capture_output=True, text=True, timeout=1800,
-        )
+        try:
+            # stdin이 터미널이 아니면 codex exec는 EOF까지 입력을 기다리므로 물려주지 않는다.
+            result = subprocess.run(
+                ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox",
+                 "--dangerously-bypass-hook-trust", "--json", prompt],
+                cwd=self._root, capture_output=True, text=True, timeout=self.CODEX_TIMEOUT,
+                stdin=subprocess.DEVNULL,
+            )
+            exit_code, stdout, stderr = result.returncode, result.stdout, result.stderr
+        except subprocess.TimeoutExpired as e:
+            # 예외 메시지에는 프롬프트 전체가 들어 있으므로 기록하지 않고, 그때까지의 출력만 남긴다.
+            exit_code = self.TIMEOUT_EXIT_CODE
+            stdout = self._as_text(e.stdout)
+            stderr = "\n".join(filter(None, [self._as_text(e.stderr), self._process_error(exit_code)]))
 
-        if result.returncode != 0:
-            print(f"\n  WARN: Claude가 비정상 종료됨 (code {result.returncode})")
-            if result.stderr:
-                print(f"  stderr: {result.stderr[:500]}")
+        if exit_code != 0:
+            print(f"\n  WARN: {self._process_error(exit_code)}")
+            if stderr:
+                print(f"  stderr: {stderr[:500]}")
 
         output = {
             "step": step_num, "name": step_name,
-            "exitCode": result.returncode,
-            "stdout": result.stdout, "stderr": result.stderr,
+            "exitCode": exit_code,
+            "stdout": stdout, "stderr": stderr,
         }
         out_path = self._phase_dir / f"step{step_num}-output.json"
         with open(out_path, "w") as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
 
         return output
+
+    @staticmethod
+    def _as_text(partial) -> str:
+        """TimeoutExpired의 부분 출력을 문자열로 바꾼다. text=True여도 bytes나 None으로 올 수 있다."""
+        if partial is None:
+            return ""
+        if isinstance(partial, bytes):
+            return partial.decode("utf-8", errors="replace")
+        return partial
+
+    def _process_error(self, exit_code: int) -> str:
+        if exit_code == self.TIMEOUT_EXIT_CODE:
+            return f"Codex 호출이 {self.CODEX_TIMEOUT}초 제한 시간을 초과함"
+        return f"Codex가 비정상 종료됨 (code {exit_code})"
 
     # --- 헤더 & 검증 ---
 
@@ -306,14 +332,15 @@ class StepExecutor:
                 tag += f" [retry {attempt}/{self.MAX_RETRIES}]"
 
             with progress_indicator(tag) as pi:
-                self._invoke_claude(step, preamble)
+                exit_code = self._invoke_codex(step, preamble)["exitCode"]
                 elapsed = int(pi.elapsed)
 
             index = self._read_json(self._index_file)
             status = next((s.get("status", "pending") for s in index["steps"] if s["step"] == step_num), "pending")
             ts = self._stamp()
 
-            if status == "completed":
+            # 프로세스가 실패했으면 status가 completed여도 성공으로 보지 않고 재시도한다.
+            if status == "completed" and exit_code == 0:
                 for s in index["steps"]:
                     if s["step"] == step_num:
                         s["completed_at"] = ts
@@ -337,6 +364,10 @@ class StepExecutor:
                 (s.get("error_message", "Step did not update status") for s in index["steps"] if s["step"] == step_num),
                 "Step did not update status",
             )
+            if exit_code != 0:
+                # index는 커밋되므로 프로세스 출력은 넣지 않고 종료 사유만 남긴다.
+                step_error = next((s.get("error_message") for s in index["steps"] if s["step"] == step_num), None)
+                err_msg = " — ".join(filter(None, [self._process_error(exit_code), step_error]))
 
             if attempt < self.MAX_RETRIES:
                 for s in index["steps"]:

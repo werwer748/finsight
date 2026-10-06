@@ -420,23 +420,23 @@ class TestCommitStep:
 
 
 # ---------------------------------------------------------------------------
-# _invoke_claude (mocked)
+# _invoke_codex (mocked)
 # ---------------------------------------------------------------------------
 
-class TestInvokeClaude:
-    def test_invokes_claude_with_correct_args(self, executor):
+class TestInvokeCodex:
+    def test_invokes_codex_with_correct_args(self, executor):
         mock_result = MagicMock(returncode=0, stdout='{"result": "ok"}', stderr="")
         step = {"step": 2, "name": "ui"}
         preamble = "PREAMBLE\n"
 
         with patch("subprocess.run", return_value=mock_result) as mock_run:
-            output = executor._invoke_claude(step, preamble)
+            output = executor._invoke_codex(step, preamble)
 
         cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "claude"
-        assert "-p" in cmd
-        assert "--dangerously-skip-permissions" in cmd
-        assert "--output-format" in cmd
+        assert cmd[:2] == ["codex", "exec"]
+        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "--dangerously-bypass-hook-trust" in cmd
+        assert "--json" in cmd
         assert "PREAMBLE" in cmd[-1]
         assert "UI를 구현하세요" in cmd[-1]
 
@@ -445,7 +445,7 @@ class TestInvokeClaude:
         step = {"step": 2, "name": "ui"}
 
         with patch("subprocess.run", return_value=mock_result):
-            executor._invoke_claude(step, "preamble")
+            executor._invoke_codex(step, "preamble")
 
         output_file = executor._phase_dir / "step2-output.json"
         assert output_file.exists()
@@ -457,7 +457,7 @@ class TestInvokeClaude:
     def test_nonexistent_step_file_exits(self, executor):
         step = {"step": 99, "name": "nonexistent"}
         with pytest.raises(SystemExit) as exc_info:
-            executor._invoke_claude(step, "preamble")
+            executor._invoke_codex(step, "preamble")
         assert exc_info.value.code == 1
 
     def test_timeout_is_1800(self, executor):
@@ -465,9 +465,272 @@ class TestInvokeClaude:
         step = {"step": 2, "name": "ui"}
 
         with patch("subprocess.run", return_value=mock_result) as mock_run:
-            executor._invoke_claude(step, "preamble")
+            executor._invoke_codex(step, "preamble")
 
         assert mock_run.call_args[1]["timeout"] == 1800
+
+    def test_does_not_inherit_stdin(self, executor):
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+        step = {"step": 2, "name": "ui"}
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_codex(step, "preamble")
+
+        assert mock_run.call_args[1]["stdin"] == subprocess.DEVNULL
+
+
+# ---------------------------------------------------------------------------
+# _invoke_codex — 제한 시간 초과 (mocked)
+# ---------------------------------------------------------------------------
+
+OUTPUT_KEYS = {"step", "name", "exitCode", "stdout", "stderr"}
+
+
+def codex_timeout(stdout=None, stderr=None):
+    """제한 시간을 넘긴 subprocess.run 대역. 실제 예외처럼 프롬프트가 든 명령어를 담아 던진다."""
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"], output=stdout, stderr=stderr)
+    return fake_run
+
+
+class TestInvokeCodexTimeout:
+    STEP = {"step": 2, "name": "ui"}
+
+    @pytest.mark.parametrize("stdout, stderr", [
+        (b"partial out", b"partial err"),
+        ("partial out", "partial err"),
+    ])
+    def test_returns_failed_result_with_partial_output(self, executor, stdout, stderr):
+        with patch("subprocess.run", side_effect=codex_timeout(stdout, stderr)):
+            output = executor._invoke_codex(self.STEP, "preamble")
+
+        assert output["exitCode"] != 0
+        assert output["stdout"] == "partial out"
+        assert "partial err" in output["stderr"]
+        assert "1800초" in output["stderr"]
+
+    def test_no_partial_output(self, executor):
+        with patch("subprocess.run", side_effect=codex_timeout()):
+            output = executor._invoke_codex(self.STEP, "preamble")
+
+        assert output["exitCode"] != 0
+        assert output["stdout"] == ""
+        assert "1800초" in output["stderr"]
+
+    def test_undecodable_bytes_do_not_raise(self, executor):
+        with patch("subprocess.run", side_effect=codex_timeout(b"\xff\xfe out", b"")):
+            output = executor._invoke_codex(self.STEP, "preamble")
+
+        assert output["stdout"].endswith(" out")
+
+    def test_saves_output_json_with_same_keys(self, executor):
+        with patch("subprocess.run", side_effect=codex_timeout(b"partial out", b"partial err")):
+            output = executor._invoke_codex(self.STEP, "preamble")
+
+        data = json.loads((executor._phase_dir / "step2-output.json").read_text())
+        assert set(data) == OUTPUT_KEYS
+        assert data == output
+        assert data["step"] == 2
+        assert data["name"] == "ui"
+
+    def test_does_not_record_prompt(self, executor):
+        with patch("subprocess.run", side_effect=codex_timeout(b"partial out", b"partial err")):
+            executor._invoke_codex(self.STEP, "SECRET_PREAMBLE\n")
+
+        raw = (executor._phase_dir / "step2-output.json").read_text()
+        assert "SECRET_PREAMBLE" not in raw
+        assert "UI를 구현하세요" not in raw
+
+
+# ---------------------------------------------------------------------------
+# _execute_single_step (git·Codex mocked)
+# ---------------------------------------------------------------------------
+
+def read_step(executor, step_num=2):
+    index = json.loads(executor._index_file.read_text())
+    return next(s for s in index["steps"] if s["step"] == step_num)
+
+
+def scripted_codex(executor, outcomes):
+    """subprocess.run 대역. 호출마다 outcome 하나를 꺼내 step 2의 index 항목을 고치고 결과를 돌려준다.
+
+    outcome은 (index에 쓸 필드, 종료 코드 또는 "timeout"). outcome이 바닥나면 테스트가 실패한다.
+    calls에는 호출 시점의 프롬프트, step status, 그때까지의 커밋 횟수를 남긴다.
+    """
+    remaining = list(outcomes)
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        assert cmd[0] == "codex", f"unexpected process: {cmd[0]}"
+        index = json.loads(executor._index_file.read_text())
+        step = next(s for s in index["steps"] if s["step"] == 2)
+        calls.append({
+            "prompt": cmd[-1],
+            "status": step["status"],
+            "commits": executor._commit_step.call_count,
+        })
+        fields, result = remaining.pop(0)
+        step.update(fields)
+        executor._index_file.write_text(json.dumps(index, ensure_ascii=False))
+        if result == "timeout":
+            raise subprocess.TimeoutExpired(
+                cmd, kwargs["timeout"], output=b"partial out", stderr=b"partial err",
+            )
+        return MagicMock(returncode=result, stdout="out", stderr="boom" if result else "")
+
+    return fake_run, calls
+
+
+@pytest.fixture
+def stepper(executor, top_index):
+    """git을 건드리지 못하게 막은 executor. Codex는 테스트마다 scripted_codex로 대체한다."""
+    executor._run_git = MagicMock(side_effect=AssertionError("git must not run in tests"))
+    executor._commit_step = MagicMock()
+    return executor
+
+
+class TestExecuteSingleStep:
+    STEP = {"step": 2, "name": "ui", "status": "pending"}
+    DONE = {"status": "completed", "summary": "UI 구현"}
+    MAX = ex.StepExecutor.MAX_RETRIES
+
+    def _top_status(self, top_index):
+        data = json.loads(top_index.read_text())
+        return next(p for p in data["phases"] if p["dir"] == "0-mvp")["status"]
+
+    def test_exit_zero_and_completed_is_success(self, stepper):
+        fake_run, calls = scripted_codex(stepper, [(self.DONE, 0)])
+
+        with patch("subprocess.run", side_effect=fake_run):
+            assert stepper._execute_single_step(self.STEP, "") is True
+
+        assert len(calls) == 1
+        step = read_step(stepper)
+        assert step["status"] == "completed"
+        assert "completed_at" in step
+        stepper._commit_step.assert_called_once_with(2, "ui")
+
+    def test_nonzero_exit_with_completed_status_is_retried(self, stepper):
+        fake_run, calls = scripted_codex(stepper, [(self.DONE, 1), (self.DONE, 0)])
+
+        with patch("subprocess.run", side_effect=fake_run):
+            assert stepper._execute_single_step(self.STEP, "") is True
+
+        assert len(calls) == 2
+        assert "이전 시도 실패" not in calls[0]["prompt"]
+        assert "이전 시도 실패" in calls[1]["prompt"]
+        assert "(code 1)" in calls[1]["prompt"]
+        # 첫 시도는 커밋되지 않고 pending으로 되돌려진 뒤 재시도된다.
+        assert calls[1]["commits"] == 0
+        assert calls[1]["status"] == "pending"
+        stepper._commit_step.assert_called_once_with(2, "ui")
+
+    def test_nonzero_exit_with_completed_status_exhausts_retries(self, stepper, top_index):
+        fake_run, calls = scripted_codex(stepper, [(self.DONE, 1)] * (self.MAX + 1))
+
+        with patch("subprocess.run", side_effect=fake_run):
+            with pytest.raises(SystemExit) as exc_info:
+                stepper._execute_single_step(self.STEP, "")
+
+        assert exc_info.value.code == 1
+        assert len(calls) == self.MAX
+        step = read_step(stepper)
+        assert step["status"] == "error"
+        assert f"[{self.MAX}회 시도 후 실패]" in step["error_message"]
+        assert "(code 1)" in step["error_message"]
+        assert "failed_at" in step
+        assert "completed_at" not in step
+        assert self._top_status(top_index) == "error"
+
+    def test_nonzero_exit_keeps_step_error_message(self, stepper):
+        failed = {"status": "error", "error_message": "타입 에러"}
+        fake_run, calls = scripted_codex(stepper, [(failed, 1), (self.DONE, 0)])
+
+        with patch("subprocess.run", side_effect=fake_run):
+            assert stepper._execute_single_step(self.STEP, "") is True
+
+        assert "(code 1)" in calls[1]["prompt"]
+        assert "타입 에러" in calls[1]["prompt"]
+
+    def test_status_never_updated_exhausts_retries(self, stepper, top_index):
+        fake_run, calls = scripted_codex(stepper, [({}, 0)] * (self.MAX + 1))
+
+        with patch("subprocess.run", side_effect=fake_run):
+            with pytest.raises(SystemExit) as exc_info:
+                stepper._execute_single_step(self.STEP, "")
+
+        assert exc_info.value.code == 1
+        assert len(calls) == self.MAX
+        assert all("Step did not update status" in c["prompt"] for c in calls[1:])
+        step = read_step(stepper)
+        assert step["status"] == "error"
+        assert step["error_message"] == f"[{self.MAX}회 시도 후 실패] Step did not update status"
+        assert "failed_at" in step
+        assert self._top_status(top_index) == "error"
+
+    @pytest.mark.parametrize("exit_code", [0, 1])
+    def test_blocked_exits_2_without_retry(self, stepper, top_index, exit_code):
+        blocked = {"status": "blocked", "blocked_reason": "API 키 필요"}
+        fake_run, calls = scripted_codex(stepper, [(blocked, exit_code), (self.DONE, 0)])
+
+        with patch("subprocess.run", side_effect=fake_run):
+            with pytest.raises(SystemExit) as exc_info:
+                stepper._execute_single_step(self.STEP, "")
+
+        assert exc_info.value.code == 2
+        assert len(calls) == 1
+        step = read_step(stepper)
+        assert step["status"] == "blocked"
+        assert step["blocked_reason"] == "API 키 필요"
+        assert "blocked_at" in step
+        assert self._top_status(top_index) == "blocked"
+        stepper._commit_step.assert_not_called()
+
+    def test_timeout_is_retried_with_reason(self, stepper):
+        fake_run, calls = scripted_codex(stepper, [({}, "timeout"), (self.DONE, 0)])
+
+        with patch("subprocess.run", side_effect=fake_run):
+            assert stepper._execute_single_step(self.STEP, "") is True
+
+        assert len(calls) == 2
+        assert "이전 시도 실패" in calls[1]["prompt"]
+        assert "1800초" in calls[1]["prompt"]
+        stepper._commit_step.assert_called_once_with(2, "ui")
+
+    def test_timeout_with_completed_status_is_not_success(self, stepper):
+        fake_run, calls = scripted_codex(stepper, [(self.DONE, "timeout"), (self.DONE, 0)])
+
+        with patch("subprocess.run", side_effect=fake_run):
+            assert stepper._execute_single_step(self.STEP, "") is True
+
+        assert len(calls) == 2
+        assert calls[1]["commits"] == 0
+        assert calls[1]["status"] == "pending"
+
+    def test_timeout_exhausts_retries_and_records_error(self, stepper, top_index):
+        fake_run, calls = scripted_codex(stepper, [({}, "timeout")] * (self.MAX + 1))
+
+        with patch("subprocess.run", side_effect=fake_run):
+            with pytest.raises(SystemExit) as exc_info:
+                stepper._execute_single_step(self.STEP, "")
+
+        assert exc_info.value.code == 1
+        assert len(calls) == self.MAX
+        step = read_step(stepper)
+        assert step["status"] == "error"
+        assert f"[{self.MAX}회 시도 후 실패]" in step["error_message"]
+        assert "1800초" in step["error_message"]
+        assert "failed_at" in step
+        # 커밋되는 index에는 프롬프트나 프로세스 출력을 남기지 않는다.
+        assert "UI를 구현하세요" not in step["error_message"]
+        assert "partial" not in step["error_message"]
+        assert self._top_status(top_index) == "error"
+
+        output = json.loads((stepper._phase_dir / "step2-output.json").read_text())
+        assert set(output) == OUTPUT_KEYS
+        assert output["exitCode"] != 0
+        assert output["stdout"] == "partial out"
+        assert "partial err" in output["stderr"]
 
 
 # ---------------------------------------------------------------------------

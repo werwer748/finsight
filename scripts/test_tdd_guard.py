@@ -151,3 +151,55 @@ class TestMain:
             "cwd": str(project),
         }
         assert run_hook(payload).returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# main() — Codex의 apply_patch 훅 입력
+# ---------------------------------------------------------------------------
+
+def patch_payload(cwd, *files):
+    """Codex가 apply_patch 전에 보내는 훅 입력. files는 (동작, 경로) 쌍이다."""
+    body = "".join(f"*** {action} File: {path}\n+x\n" for action, path in files)
+    return {
+        "tool_name": "apply_patch",
+        "tool_input": {"command": f"*** Begin Patch\n{body}*** End Patch"},
+        "cwd": str(cwd),
+    }
+
+
+class TestMainApplyPatch:
+    def test_added_file_without_test_exits_2(self, project):
+        payload = patch_payload(project, ("Add", project / "src/lib/foo.ts"))
+        r = run_hook(payload, project_dir=project)
+        assert r.returncode == 2
+        assert "TDD GUARD" in r.stderr
+
+    def test_updated_file_with_changed_test_exits_0(self, project):
+        write(project, "src/lib/foo.ts")
+        test_file = write(project, "src/lib/foo.test.ts")
+        commit_all(project)
+        test_file.write_text("new case")
+        payload = patch_payload(project, ("Update", project / "src/lib/foo.ts"))
+        r = run_hook(payload, project_dir=project)
+        assert r.returncode == 0
+        assert r.stderr == ""
+
+    def test_relative_path_is_resolved_against_cwd(self, project):
+        payload = patch_payload(project, ("Add", "src/lib/foo.ts"))
+        r = run_hook(payload, project_dir=project)
+        assert r.returncode == 2
+        assert "src/lib/foo.test.ts" in r.stderr
+
+    def test_one_violation_blocks_multi_file_patch(self, project):
+        payload = patch_payload(project, ("Add", "README.md"), ("Add", "src/lib/foo.ts"))
+        assert run_hook(payload, project_dir=project).returncode == 2
+
+    def test_test_and_implementation_in_one_patch_is_blocked(self, project):
+        payload = patch_payload(project, ("Add", "src/lib/foo.test.ts"), ("Add", "src/lib/foo.ts"))
+        assert run_hook(payload, project_dir=project).returncode == 2
+
+    def test_unguarded_paths_exit_0(self, project):
+        payload = patch_payload(project, ("Add", "README.md"), ("Update", "src/app/page.tsx"))
+        r = run_hook(payload, project_dir=project)
+        assert r.returncode == 0
+        assert r.stderr == ""
