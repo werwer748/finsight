@@ -20,6 +20,13 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   response.cookies
     .getAll()
     .forEach((cookie) => redirectResponse.cookies.set(cookie));
+  // 세션 쿠키가 담긴 리다이렉트가 CDN에 캐시되지 않도록 Supabase가 붙인 캐시 방지 헤더도 옮긴다.
+  ["Cache-Control", "Expires", "Pragma"].forEach((name) => {
+    const value = response.headers.get(name);
+    if (value !== null) {
+      redirectResponse.headers.set(name, value);
+    }
+  });
   return redirectResponse;
 }
 
