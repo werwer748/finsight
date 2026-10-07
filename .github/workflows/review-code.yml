@@ -18,6 +18,8 @@ jobs:
     if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      decision: ${{ steps.review.outputs.decision }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -29,13 +31,75 @@ jobs:
           node-version: 22
       - run: npm install -g @anthropic-ai/claude-code
       - name: Review
+        id: review
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           BASE_REF: ${{ github.base_ref }}
         # 보고를 작업 폴더에 쓰면 스킬이 추적되지 않는 새 파일로 보고 리뷰 대상에 넣는다.
-        run: python3 scripts/review_gate.py --base "origin/$BASE_REF" --fail-on warning --strict > "$RUNNER_TEMP/review.md"
+        run: python3 scripts/review_gate.py --base "origin/$BASE_REF" --fail-on warning --strict --decision-output "$GITHUB_OUTPUT" > "$RUNNER_TEMP/review.md"
       - name: Comment
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr comment ${{ github.event.pull_request.number }} --body-file "$RUNNER_TEMP/review.md" --edit-last --create-if-none
+      # 사유는 위 댓글 끝의 머지 판정 줄에 있다. 여기서 댓글을 따로 달면 다음 실행의 --edit-last가 그 댓글을 덮어쓴다.
+      - name: Close
+        if: always() && steps.review.outputs.decision == 'reject'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr close ${{ github.event.pull_request.number }}
+
+  test:
+    # 시크릿을 쓰지 않으므로 draft와 포크 PR에서도 돈다.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run test
+
+  auto-merge:
+    # 리뷰 판정이 merge이고 lint·build·test까지 통과한 PR만 머지한다.
+    # 기본 브랜치로 가는 PR만 다룬다. base가 다른 PR을 리뷰한 뒤 base를 바꿔 리뷰하지 않은 커밋을 넣지 못하게 한다.
+    needs: [review-code, test]
+    if: ${{ needs.review-code.outputs.decision == 'merge' && github.base_ref == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 쓰기 권한 토큰은 Claude가 도는 job에 주지 않고 이 job에만 준다.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          # 리뷰 규칙·게이트·에이전트 훅·CI 설정과 의존성. 앞의 것을 고친 PR은 고친 판으로 자기 자신을 심사한 것이고,
+          # lockfile은 리뷰어가 읽지 않는다. 그래서 사람이 머지한다. docs/와 앱 설정 파일은 리뷰어가 읽으므로 넣지 않는다.
+          # PR의 워크플로우는 PR 쪽 판으로 돌기 때문에 이 검사도 PR이 고칠 수 있다. 그런 PR을 막는 것은 이 검사가 아니라
+          # GITHUB_TOKEN에 workflows 권한이 없어 워크플로우 파일을 고친 PR을 머지할 수 없다는 GitHub의 제한이다.
+          # 목록을 바꾸면 CLAUDE.md의 "개발 프로세스"도 고친다.
+          PROTECTED: '^(\.github/|\.githooks/|\.claude/|\.codex/|scripts/|package\.json$|package-lock\.json$|\.npmrc$)|(^|/)CLAUDE(\.local)?\.md$'
+        run: |
+          # 옮긴 파일은 옛 경로도 본다. 이 API는 3000개까지만 주므로 그만큼 큰 PR은 머지하지 않는다.
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)')
+          if [ -z "$files" ] || [ "${CHANGED_FILES:-3000}" -ge 3000 ] || printf '%s\n' "$files" | grep -qE "$PROTECTED"; then
+            echo "::notice::리뷰·CI 설정이나 의존성을 고친 PR이라 자동 머지하지 않습니다. 직접 머지하세요."
+            exit 0
+          fi
+          # 리뷰한 커밋 뒤에 push가 있었으면 머지하지 않는다.
+          gh pr merge "$PR_URL" --merge --match-head-commit "$HEAD_SHA"

@@ -4,9 +4,12 @@ Review Gate — /review-code 스킬을 헤드리스로 돌리고 판정에 따�
 
 pre-commit 훅(.githooks/pre-commit)과 GitHub Action(.github/workflows/review-code.yml)이 같이 쓴다.
 stdout에는 리뷰 보고만, stderr에는 안내만 쓴다. 통과·건너뜀은 exit 0, 차단은 exit 1.
+--decision-output을 주면 PR을 자동 머지할지(merge), 사람이 판단할지(hold), 닫을지(reject)도 정해
+보고 끝에 한 줄로 붙이고 그 파일에 적는다.
 
 Usage:
     python3 scripts/review_gate.py (--staged | --base <ref>) [--fail-on danger|warning] [--strict] [--timeout <초>]
+                                   [--decision-output <파일>]
 """
 
 import argparse
@@ -21,6 +24,15 @@ VERDICT = re.compile(r"^## 리뷰 결과: (🔴|🟠|🟡|🟢)(.*)$", re.MULTIL
 NO_CHANGES = "리뷰할 변경이 없습니다."
 NOT_RUN = "## 리뷰 결과: ⚫ 리뷰를 실행하지 못했습니다"
 BLOCKING = {"danger": ("🔴",), "warning": ("🔴", "🟠")}
+COUNTS = re.compile(r"^🔴 (\d+) · 🟠 (\d+) · 🟡 (\d+)", re.MULTILINE)
+# 🔴가 이만큼이면 PR을 닫는다. 🔴·🟠 없이 🟡가 이만큼 이하면 자동 머지한다. 그 사이는 사람이 판단한다.
+REJECT_MIN_DANGER = 2
+AUTO_MERGE_MAX_CAUTION = 2
+DECISION_NOTES = {
+    "merge": "자동 머지 대상 — lint·build·test가 통과하면 머지합니다. 리뷰·CI 설정이나 의존성을 고친 PR은 직접 머지합니다.",
+    "hold": "직접 판단 — 자동으로 머지하지 않습니다.",
+    "reject": f"거절 — 🔴 위험이 {REJECT_MIN_DANGER}건 이상이라 PR을 닫습니다. 고친 뒤 다시 열면 리뷰가 다시 돕니다.",
+}
 DOC_DIRS = ("docs/", "phases/")
 CLAUDE_TIMEOUT = 1500
 # 프로젝트 안의 파일 읽기와 읽기 전용 명령(git diff·log·show, grep, rg, find, ls)은 규칙 없이도 dontAsk에서 실행된다.
@@ -32,6 +44,9 @@ SECRET = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
 
 def parse_report(report: str) -> Tuple[Optional[str], bool]:
     """(판정 단계, 리뷰에 실패한 차원이 있는가). 판정 줄을 읽을 수 없으면 단계는 None이다."""
+    # 실패한 실행의 출력에 판정 줄이 섞여 있어도 판정으로 치지 않는다.
+    if report.startswith(NOT_RUN):
+        return None, False
     m = VERDICT.search(report)
     if m:
         return m.group(1), "리뷰 실패" in m.group(2)
@@ -46,6 +61,27 @@ def exit_code(stage: Optional[str], failed: bool, *, fail_on: str, strict: bool)
     if stage is None or failed:
         return 1 if strict else 0
     return 0
+
+
+def parse_counts(report: str) -> Optional[Tuple[int, int, int]]:
+    """건수 줄의 (🔴, 🟠, 🟡) 발견 수. 건수 줄을 읽을 수 없으면 None이다."""
+    m = COUNTS.search(report)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def decide(stage: Optional[str], failed: bool, counts: Optional[Tuple[int, int, int]]) -> str:
+    """PR을 어떻게 할지 정한다. merge는 자동 머지, hold는 사람이 판단, reject는 PR 닫기."""
+    if stage is None or counts is None:
+        return "hold"
+    danger, warning, caution = counts
+    # 판정 줄과 건수 줄이 어긋난 보고로는 머지하지도 닫지도 않는다.
+    if stage != ("🔴" if danger else "🟠" if warning else "🟡" if caution else "🟢"):
+        return "hold"
+    if danger >= REJECT_MIN_DANGER:
+        return "reject"
+    if failed or danger or warning or caution > AUTO_MERGE_MAX_CAUTION:
+        return "hold"
+    return "merge"
 
 
 def _is_doc(path: str) -> bool:
@@ -107,6 +143,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="danger는 🔴에서, warning은 🔴·🟠에서 막는다")
     parser.add_argument("--strict", action="store_true", help="리뷰를 끝내지 못한 경우도 막는다")
     parser.add_argument("--timeout", type=int, default=CLAUDE_TIMEOUT, help="claude 실행 제한 시간(초)")
+    parser.add_argument("--decision-output", metavar="파일",
+                        help="머지 판정을 보고 끝에 붙이고 이 파일에 decision=<merge|hold|reject>로 덧붙인다")
     args = parser.parse_args(argv)
 
     reason = skip_reason(args.staged)
@@ -119,6 +157,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(report)
 
     stage, failed = parse_report(report)
+    if args.decision_output:
+        decision = decide(stage, failed, parse_counts(report))
+        print(f"\n**머지 판정: {DECISION_NOTES[decision]}**")
+        with open(args.decision_output, "a", encoding="utf-8") as f:
+            f.write(f"decision={decision}\n")
     code = exit_code(stage, failed, fail_on=args.fail_on, strict=args.strict)
     if code:
         print("REVIEW GATE: 차단합니다. 위 보고를 확인하고 고친 뒤 다시 시도하세요.", file=sys.stderr)

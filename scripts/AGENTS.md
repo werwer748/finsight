@@ -9,7 +9,7 @@
 | `execute.py` | phase의 step을 순서대로 실행한다. step마다 `codex exec`를 새 프로세스로 띄우고 재시도, 커밋, 타임스탬프 기록을 맡는다. |
 | `tdd_guard.py` | 파일 수정 전 훅. 대응 테스트가 먼저 변경되지 않은 구현 파일 수정을 막는다. |
 | `bash_guard.py` | 셸 실행 전 훅. 되돌리기 어려운 명령어 패턴을 막는다. |
-| `review_gate.py` | `/review-code` 스킬을 헤드리스로 돌리고 판정에 따라 커밋·PR을 막는다. pre-commit 훅과 GitHub Action이 같이 쓴다. |
+| `review_gate.py` | `/review-code` 스킬을 헤드리스로 돌리고 판정에 따라 커밋·PR을 막는다. PR에서는 자동 머지·직접 판단·닫기도 정한다. pre-commit 훅과 GitHub Action이 같이 쓴다. |
 | `test_*.py` | 위 네 파일의 pytest 테스트. |
 
 ## 명령어
@@ -41,6 +41,10 @@ python3 -m pytest scripts                         # 테스트
 - `SKIP_REVIEW=1`이면 `review_gate.py`가 리뷰를 건너뛴다. `execute.py`가 step 커밋을 위해 세운다. step에서 만든 코드는 PR 단계에서 한 번에 리뷰한다.
 - `REVIEW_GATE_ACTIVE=1`은 `review_gate.py`가 리뷰 세션에 세우는 값이다. `.claude/settings.json`의 Stop 훅이 이 값을 보고 lint·build·test를 건너뛴다.
 - `review_gate.py`는 로컬에서 리뷰를 끝내지 못하면 경고만 하고 통과시킨다. pre-commit은 9분(`--timeout 540`)에서 멈춘다. CI는 `--strict`로 실패시킨다.
+- `review_gate.py`에 `--decision-output <파일>`을 주면 보고의 건수 줄(`🔴 N · 🟠 N · 🟡 N`)로 머지 판정을 정해 보고 끝에 한 줄로 붙이고 파일에 `decision=<merge|hold|reject>`를 덧붙인다. 🔴 2건 이상은 `reject`, 🔴·🟠 없이 🟡 2건 이하는 `merge`, 나머지와 읽을 수 없는 보고는 `hold`다. 워크플로우가 `$GITHUB_OUTPUT`을 넘겨 `reject`면 PR을 닫고, `merge`면 `test` job까지 통과했을 때 `auto-merge` job이 머지한다.
+- PR의 워크플로우는 PR 쪽 워크플로우 파일, `review_gate.py`, 리뷰 규칙으로 돈다. 그래서 `auto-merge` job은 리뷰·CI 설정과 의존성(워크플로우의 `PROTECTED` 경로)을 고친 PR을 머지하지 않는다. `PROTECTED`를 바꾸면 루트 `CLAUDE.md`의 목록도 고친다.
+- 워크플로우 파일을 고쳐 `PROTECTED` 검사를 지운 PR은 이 검사로 막을 수 없다. 그런 PR은 `GITHUB_TOKEN`에 `workflows` 권한이 없어 머지가 거부된다는 GitHub의 제한에 기댄다. 이 저장소에서 직접 확인한 적은 없다. 이 장치는 리뷰 설정을 고친 PR이 사람 확인 없이 들어가는 것을 막을 뿐, 저장소에 push할 수 있는 사람을 막지 않는다. `main` 보호는 `review-code` 체크뿐이고 승인은 필수가 아니다.
+- 워크플로우의 job 이름 `review-code`는 `main` 브랜치 보호의 필수 체크 이름이다. 바꾸지 않는다.
 - 리뷰 세션에 허용하는 도구는 `review_gate.py`의 `ALLOWED_TOOLS`뿐이다. 프로젝트 안의 파일 읽기와 읽기 전용 명령은 규칙 없이도 실행된다. `Read`나 `Bash(git *)` 같은 넓은 규칙을 더하면 프로젝트 밖 파일(환경변수의 토큰 등)과 쓰기 명령이 열리므로 더하지 않는다.
 - `review_gate.py`는 보고를 출력하기 전에 `sk-ant-`로 시작하는 문자열을 가린다. CI에서는 보고가 PR 댓글로 공개된다.
 - Codex는 루트에서 실행 폴더까지의 `AGENTS.md`만 자동으로 읽는다. 저장소 루트에서 실행한 세션은 이 파일을 자동으로 읽지 않는다.
