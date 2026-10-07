@@ -18,6 +18,8 @@ jobs:
     if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      decision: ${{ steps.review.outputs.decision }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -29,13 +31,57 @@ jobs:
           node-version: 22
       - run: npm install -g @anthropic-ai/claude-code
       - name: Review
+        id: review
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           BASE_REF: ${{ github.base_ref }}
         # 보고를 작업 폴더에 쓰면 스킬이 추적되지 않는 새 파일로 보고 리뷰 대상에 넣는다.
-        run: python3 scripts/review_gate.py --base "origin/$BASE_REF" --fail-on warning --strict > "$RUNNER_TEMP/review.md"
+        run: python3 scripts/review_gate.py --base "origin/$BASE_REF" --fail-on warning --strict --decision-output "$GITHUB_OUTPUT" > "$RUNNER_TEMP/review.md"
       - name: Comment
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr comment ${{ github.event.pull_request.number }} --body-file "$RUNNER_TEMP/review.md" --edit-last --create-if-none
+      # 사유는 위 댓글 끝의 머지 판정 줄에 있다. 여기서 댓글을 따로 달면 다음 실행의 --edit-last가 그 댓글을 덮어쓴다.
+      - name: Close
+        if: always() && steps.review.outputs.decision == 'reject'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr close ${{ github.event.pull_request.number }}
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run test
+
+  auto-merge:
+    # 리뷰 판정이 merge이고 lint·build·test까지 통과한 PR만 머지한다.
+    needs: [review-code, test]
+    if: ${{ needs.review-code.outputs.decision == 'merge' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 쓰기 권한 토큰은 Claude가 도는 job에 주지 않고 이 job에만 준다.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # 리뷰한 커밋 뒤에 push가 있었으면 머지하지 않는다.
+        run: gh pr merge "$PR_URL" --merge --match-head-commit "$HEAD_SHA"

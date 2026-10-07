@@ -19,6 +19,7 @@ import review_gate as gate
 PROJECT_ROOT = Path(__file__).parent.parent
 SETTINGS = PROJECT_ROOT / ".claude" / "settings.json"
 PRE_COMMIT = PROJECT_ROOT / ".githooks" / "pre-commit"
+WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "review-code.yml"
 
 VERDICT_LINES = {
     "🔴": "## 리뷰 결과: 🔴 위험 — 머지 금지",
@@ -28,8 +29,9 @@ VERDICT_LINES = {
 }
 
 
-def report(stage, suffix=""):
-    return f"{VERDICT_LINES[stage]}{suffix}\n🔴 0 · 🟠 0 · 🟡 0    기준 staged · 파일 1개\n"
+def report(stage, suffix="", counts=(0, 0, 0)):
+    red, orange, yellow = counts
+    return f"{VERDICT_LINES[stage]}{suffix}\n🔴 {red} · 🟠 {orange} · 🟡 {yellow}    기준 staged · 파일 1개\n"
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +56,23 @@ class TestParseReport:
     @pytest.mark.parametrize("text", ["", "API Error: 529", "## 리뷰 결과: ⚫ 리뷰를 실행하지 못했습니다"])
     def test_unreadable_report_has_no_stage(self, text):
         assert gate.parse_report(text)[0] is None
+
+
+# ---------------------------------------------------------------------------
+# parse_counts()
+# ---------------------------------------------------------------------------
+
+class TestParseCounts:
+    def test_reads_counts_line(self):
+        assert gate.parse_counts(report("🔴", counts=(1, 1, 3))) == (1, 1, 3)
+
+    def test_counts_line_with_merged_duplicates_note(self):
+        text = "## 리뷰 결과: 🟡 주의 — 수정 권장\n🔴 0 · 🟠 0 · 🟡 12    기준 main · 파일 4개 (중복 1건 합침)\n"
+        assert gate.parse_counts(text) == (0, 0, 12)
+
+    @pytest.mark.parametrize("text", ["", "리뷰할 변경이 없습니다.", "## 리뷰 결과: ⚫ 리뷰를 실행하지 못했습니다"])
+    def test_report_without_counts_line(self, text):
+        assert gate.parse_counts(text) is None
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +102,50 @@ class TestExitCode:
     ])
     def test_ci_blocks_warning_and_incomplete_review(self, stage, failed, expected):
         assert gate.exit_code(stage, failed, fail_on="warning", strict=True) == expected
+
+
+# ---------------------------------------------------------------------------
+# decide()
+# ---------------------------------------------------------------------------
+
+class TestDecide:
+    @pytest.mark.parametrize("stage, counts", [
+        ("🟢", (0, 0, 0)),
+        ("🟡", (0, 0, 1)),
+        ("🟡", (0, 0, 2)),
+    ])
+    def test_merges_when_at_most_two_cautions(self, stage, counts):
+        assert gate.decide(stage, False, counts) == "merge"
+
+    @pytest.mark.parametrize("stage, failed, counts", [
+        ("🟡", False, (0, 0, 3)),
+        ("🟠", False, (0, 1, 0)),
+        ("🟠", False, (0, 2, 0)),
+        ("🔴", False, (1, 0, 0)),
+        ("🟡", True, (0, 0, 1)),
+    ])
+    def test_holds_for_a_person_to_judge(self, stage, failed, counts):
+        assert gate.decide(stage, failed, counts) == "hold"
+
+    @pytest.mark.parametrize("stage, failed, counts", [
+        ("🔴", False, (2, 0, 0)),
+        ("🔴", False, (3, 1, 5)),
+        ("🔴", True, (2, 0, 0)),
+    ])
+    def test_rejects_two_or_more_dangers(self, stage, failed, counts):
+        assert gate.decide(stage, failed, counts) == "reject"
+
+    @pytest.mark.parametrize("stage, counts", [
+        (None, None),
+        (None, (0, 0, 0)),
+        ("🟢", None),
+        # 판정 줄과 건수 줄이 어긋난 보고로는 머지하지도 닫지도 않는다.
+        ("🟢", (2, 0, 0)),
+        ("🔴", (0, 0, 0)),
+        ("🟡", (0, 0, 0)),
+    ])
+    def test_holds_when_report_is_unreadable_or_inconsistent(self, stage, counts):
+        assert gate.decide(stage, False, counts) == "hold"
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +291,32 @@ class TestMain:
             gate.main([])
         assert exc_info.value.code == 2
 
+    @pytest.mark.parametrize("stage, counts, decision", [
+        ("🟡", (0, 0, 2), "merge"),
+        ("🟠", (0, 1, 0), "hold"),
+        ("🔴", (2, 0, 0), "reject"),
+    ])
+    def test_decision_output_gets_decision_and_report_gets_note(self, stage, counts, decision, tmp_path, capsys):
+        out_file = tmp_path / "github_output"
+        out_file.write_text("other=1\n", encoding="utf-8")
+        with patch("subprocess.run", fake_run(result=report(stage, counts=counts))):
+            gate.main(["--base", "origin/main", "--decision-output", str(out_file)])
+        assert out_file.read_text(encoding="utf-8") == f"other=1\ndecision={decision}\n"
+        out = capsys.readouterr().out
+        assert VERDICT_LINES[stage] in out
+        assert gate.DECISION_NOTES[decision] in out
+
+    def test_review_that_could_not_run_is_held(self, tmp_path):
+        out_file = tmp_path / "github_output"
+        with patch("subprocess.run", fake_run(stdout="not json")):
+            gate.main(["--base", "origin/main", "--strict", "--decision-output", str(out_file)])
+        assert out_file.read_text(encoding="utf-8") == "decision=hold\n"
+
+    def test_no_decision_note_without_decision_output(self, capsys):
+        with patch("subprocess.run", fake_run(result=report("🟢"))):
+            gate.main(["--staged"])
+        assert "머지 판정" not in capsys.readouterr().out
+
 
 # ---------------------------------------------------------------------------
 # .claude/settings.json 의 Stop 훅 — 리뷰 세션에서는 lint·build·test를 돌리지 않는다
@@ -276,3 +365,17 @@ class TestPreCommitHook:
 
     def test_gives_up_before_the_ten_minute_bash_limit(self):
         assert "--timeout 540" in PRE_COMMIT.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# .github/workflows/review-code.yml
+# ---------------------------------------------------------------------------
+
+class TestWorkflow:
+    def test_review_step_writes_decision_to_step_output(self):
+        assert '--decision-output "$GITHUB_OUTPUT"' in WORKFLOW.read_text(encoding="utf-8")
+
+    def test_merges_only_the_reviewed_commit(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        assert "gh pr merge" in text
+        assert "--match-head-commit" in text
