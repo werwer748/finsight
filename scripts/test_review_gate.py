@@ -89,7 +89,7 @@ class TestExitCode:
 # main() — claude와 git은 mock
 # ---------------------------------------------------------------------------
 
-def fake_run(staged="src/lib/a.ts\n", result=None, returncode=0, raises=None, stdout=None):
+def fake_run(staged="src/lib/a.ts\0", result=None, returncode=0, raises=None, stdout=None):
     """git에는 staged 파일 목록을, claude에는 JSON 결과를 돌려주는 subprocess.run 대역."""
     def run(cmd, **kwargs):
         if cmd[0] == "git":
@@ -121,8 +121,9 @@ class TestSkip:
 
     @pytest.mark.parametrize("staged", [
         "",
-        "docs/ADR.md\n",
-        "CLAUDE.md\nphases/1-dashboard/index.json\n.claude/skills/review-code/SKILL.md\n",
+        "docs/ADR.md\0",
+        "CLAUDE.md\0phases/1-dashboard/index.json\0.claude/skills/review-code/SKILL.md\0",
+        "docs/한글 문서.md\0",
     ])
     def test_staged_without_reviewable_files_skips(self, staged):
         with patch("subprocess.run", fake_run(staged=staged, result=report("🔴"))) as mock_run:
@@ -130,9 +131,14 @@ class TestSkip:
         assert claude_calls(mock_run) == []
 
     def test_staged_with_code_among_docs_runs_review(self):
-        with patch("subprocess.run", fake_run(staged="docs/ADR.md\nsrc/lib/a.ts\n", result=report("🟢"))) as mock_run:
+        with patch("subprocess.run", fake_run(staged="docs/ADR.md\0src/lib/a.ts\0", result=report("🟢"))) as mock_run:
             assert gate.main(["--staged"]) == 0
         assert len(claude_calls(mock_run)) == 1
+
+    def test_lists_staged_files_nul_separated(self):
+        with patch("subprocess.run", fake_run(staged="docs/ADR.md\0")) as mock_run:
+            gate.main(["--staged"])
+        assert mock_run.call_args_list[0][0][0] == ["git", "diff", "--cached", "--name-only", "-z"]
 
     def test_base_mode_does_not_filter_by_staged_files(self):
         with patch("subprocess.run", fake_run(staged="", result=report("🟢"))) as mock_run:
@@ -163,11 +169,13 @@ class TestClaudeInvocation:
         assert kwargs["stdin"] == subprocess.DEVNULL
         assert kwargs["timeout"] == gate.CLAUDE_TIMEOUT
 
-    def test_does_not_allow_editing_tools(self, monkeypatch):
+    def test_timeout_argument_overrides_default(self, monkeypatch):
+        _, kwargs = self.run_main(["--staged", "--timeout", "540"], monkeypatch)
+        assert kwargs["timeout"] == 540
+
+    def test_allows_only_reading_and_the_merge_base_lookup(self, monkeypatch):
         cmd, _ = self.run_main(["--staged"], monkeypatch)
-        allowed = cmd[cmd.index("--allowedTools") + 1:]
-        assert allowed
-        assert not any(tool.startswith(("Edit", "Write", "NotebookEdit")) for tool in allowed)
+        assert cmd[cmd.index("--allowedTools") + 1:] == ["Read", "Agent", "Bash(git merge-base *)"]
 
     def test_child_env_marks_review_session_and_drops_nesting_flag(self, monkeypatch):
         _, kwargs = self.run_main(["--staged"], monkeypatch)
@@ -192,9 +200,11 @@ class TestMain:
 
     @pytest.mark.parametrize("failure", [
         dict(raises=FileNotFoundError("claude")),
+        dict(raises=PermissionError("claude")),
         dict(raises=subprocess.TimeoutExpired("claude", gate.CLAUDE_TIMEOUT)),
         dict(result="Credit balance is too low", returncode=1),
         dict(stdout="not json"),
+        dict(stdout="[]"),
     ])
     def test_review_that_could_not_run(self, failure, capsys):
         with patch("subprocess.run", fake_run(**failure)):
@@ -254,3 +264,6 @@ class TestPreCommitHook:
         assert "scripts/review_gate.py" in text
         assert "--staged" in text
         assert "--fail-on danger" in text
+
+    def test_gives_up_before_the_ten_minute_bash_limit(self):
+        assert "--timeout 540" in PRE_COMMIT.read_text(encoding="utf-8")

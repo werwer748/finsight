@@ -10,13 +10,19 @@ argument-hint: "[기준 브랜치 또는 커밋, 기본 main | --staged]"
 
 ## 1. 대상 계산
 
-Bash 호출 한 번으로 merge-base와 변경 파일 목록을 구한다.
+먼저 merge-base를 구한다.
 
 ```bash
-git merge-base <기준> HEAD && git diff --merge-base --name-status <기준> && echo "--- untracked ---" && git ls-files --others --exclude-standard
+git merge-base <기준> HEAD
 ```
 
-첫 줄이 merge-base 해시다. 이 명령을 그대로 쓴다. `$(…)` 치환이나 변수를 넣으면 훅과 CI의 헤드리스 실행에서 거부된다.
+출력된 해시를 넣어 변경 파일 목록을 구한다.
+
+```bash
+git diff --name-status <해시> && echo "--- untracked ---" && git ls-files --others --exclude-standard
+```
+
+두 명령을 그대로 쓴다. `$(…)` 치환, 변수, `git diff --merge-base`를 쓰면 훅과 CI의 헤드리스 실행에서 거부된다.
 
 `git diff --name-status`는 merge-base 이후의 커밋과 커밋하지 않은 변경을 함께 보여 주고, `git ls-files --others`는 추적되지 않는 새 파일을 보여 준다. 둘 다 비어 있으면 "리뷰할 변경이 없습니다."라고 알리고 끝낸다. 서브에이전트를 띄우지 않는다.
 
