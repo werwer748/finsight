@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -395,21 +396,80 @@ class TestWorkflow:
 
     def test_auto_merge_waits_for_review_and_tests(self):
         assert "needs: [review-code, test]" in self.text
-        assert "if: ${{ needs.review-code.outputs.decision == 'merge' }}" in self.text
+        assert "if: ${{ needs.review-code.outputs.decision == 'merge' &&" in self.text
 
-    def test_merges_only_the_reviewed_commit_on_the_reviewed_base(self):
-        assert self.text.count("gh pr merge") == 1
-        assert '--match-head-commit "$HEAD_SHA"' in self.text
-        assert '!= "$BASE_REF"' in self.text
+    def test_auto_merges_only_into_the_default_branch(self):
+        # base가 다른 PR을 리뷰한 뒤 base를 main으로 바꿔 리뷰하지 않은 커밋을 넣지 못하게 한다.
+        assert "github.base_ref == github.event.repository.default_branch" in self.text
 
-    def test_does_not_auto_merge_changes_to_review_and_ci_setup(self):
-        # 이 파일들을 고친 PR은 고친 판으로 자기 자신을 심사한 것이다.
-        pattern = re.search(r"PROTECTED: '(.+)'", self.text).group(1)
-        assert 'grep -qE "$PROTECTED"' in self.text
-        for path in [
-            ".github/workflows/review-code.yml", ".githooks/pre-commit", ".claude/settings.json",
-            ".claude/skills/review-code/SKILL.md", "scripts/review_gate.py", "CLAUDE.md", "package.json",
-        ]:
-            assert re.search(pattern, path), path
-        for path in ["src/lib/a.ts", "src/scripts/a.ts", "docs/ADR.md", "docs/CLAUDE.md", "package-lock.json"]:
-            assert not re.search(pattern, path), path
+    def test_lists_old_paths_of_moved_files(self):
+        assert "previous_filename" in self.text
+
+
+# ---------------------------------------------------------------------------
+# auto-merge job의 Merge 스텝 — gh는 가짜로 대체해 스크립트를 실제로 실행한다
+# ---------------------------------------------------------------------------
+
+MERGE_COMMAND = "pr merge https://github.com/o/r/pull/7 --merge --match-head-commit abc123\n"
+
+
+def run_merge_step(tmp_path, files, changed_files=None, api_fails=False):
+    """Merge 스텝을 실행해 (종료 코드, 가짜 gh가 받은 머지 명령 또는 None)을 돌려준다."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = text[text.index("\n  auto-merge:"):]
+    script = textwrap.dedent(job.split("        run: |\n", 1)[1])
+
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  api) [ -n "$FAKE_API_FAILS" ] && exit 1; printf "%s" "$FAKE_FILES" ;;\n'
+        '  pr) echo "$*" > "$FAKE_MERGE_LOG" ;;\n'
+        "esac\n"
+    )
+    fake_gh.chmod(0o755)
+    log = tmp_path / "merge.log"
+    env = dict(
+        os.environ,
+        PATH=f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        REPO="o/r", PR_NUMBER="7", PR_URL="https://github.com/o/r/pull/7", HEAD_SHA="abc123",
+        CHANGED_FILES=str(len(files) if changed_files is None else changed_files),
+        PROTECTED=re.search(r"PROTECTED: '(.+)'", job).group(1),
+        FAKE_FILES="\n".join(files), FAKE_MERGE_LOG=str(log), FAKE_API_FAILS="1" if api_fails else "",
+    )
+    r = subprocess.run(["bash", "-e", "-c", script], capture_output=True, text=True, env=env)
+    return r.returncode, log.read_text(encoding="utf-8") if log.exists() else None
+
+
+class TestMergeStep:
+    def test_merges_the_reviewed_commit(self, tmp_path):
+        files = ["src/lib/a.ts", "src/scripts/a.ts", "docs/ADR.md"]
+        assert run_merge_step(tmp_path, files) == (0, MERGE_COMMAND)
+
+    # 이 파일들을 고친 PR은 고친 판으로 자기 자신을 심사한 것이다. lockfile은 리뷰어가 읽지 않는다.
+    @pytest.mark.parametrize("path", [
+        ".github/workflows/review-code.yml",
+        ".githooks/pre-commit",
+        ".claude/settings.json",
+        ".claude/skills/review-code/SKILL.md",
+        "scripts/review_gate.py",
+        "CLAUDE.md",
+        "CLAUDE.local.md",
+        "docs/CLAUDE.md",
+        "package.json",
+        "package-lock.json",
+        ".npmrc",
+    ])
+    def test_leaves_changes_to_review_setup_and_dependencies_to_a_person(self, tmp_path, path):
+        assert run_merge_step(tmp_path, ["src/lib/a.ts", path]) == (0, None)
+
+    def test_does_not_merge_when_file_list_is_empty(self, tmp_path):
+        assert run_merge_step(tmp_path, []) == (0, None)
+
+    def test_does_not_merge_when_file_list_may_be_truncated(self, tmp_path):
+        assert run_merge_step(tmp_path, ["src/lib/a.ts"], changed_files=3000) == (0, None)
+
+    def test_fails_without_merging_when_file_list_is_unavailable(self, tmp_path):
+        code, merged = run_merge_step(tmp_path, ["src/lib/a.ts"], api_fails=True)
+        assert code != 0
+        assert merged is None
