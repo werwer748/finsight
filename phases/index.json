@@ -4,6 +4,10 @@
       "dir": "0-skeleton",
       "status": "completed",
       "completed_at": "2026-10-04T21:05:31+0900"
+    },
+    {
+      "dir": "1-dashboard",
+      "status": "pending"
     }
   ]
 }
