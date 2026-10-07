@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
@@ -14,5 +14,7 @@ export default defineConfig({
     // Testing Library가 전역 afterEach를 찾아 테스트마다 자동으로 cleanup 한다.
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
+    // Claude Code worktree는 저장소 전체의 복사본이라 같은 테스트가 한 번 더 잡힌다.
+    exclude: [...configDefaults.exclude, ".claude/worktrees/**"],
   },
 });

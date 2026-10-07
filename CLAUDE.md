@@ -20,6 +20,7 @@
 - 페이지(`src/app/`)는 얇게 두고, 로직은 `src/lib/`와 `src/services/`, UI는 `src/components/`, 타입은 `src/types/`에 둔다.
 - 테스트는 구현 파일과 같은 폴더에 `이름.test.ts` 또는 `이름.test.tsx`로 둔다. `scripts/tdd_guard.py` 훅이 테스트가 먼저 변경되지 않은 구현 파일 수정을 차단한다.
 - UI 문구와 오류 메시지는 한국어로 쓴다.
+- UI를 만들거나 고칠 때는 `docs/UI_GUIDE.md`를 따른다. 토큰, 컴포넌트 variant, 버튼 문구를 새로 만들거나 바꾸면 같은 변경에서 그 문서도 고친다.
 - 패키지 매니저는 npm을 쓴다.
 
 ## 개발 프로세스
