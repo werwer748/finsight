@@ -7,7 +7,7 @@
 - `/CLAUDE.md`
 - `/docs/PRD.md` (개발 단계: 이 phase는 `1-dashboard`다)
 - `/docs/ARCHITECTURE.md`
-- `/docs/ADR.md` (ADR-004, ADR-012)
+- `/docs/ADR.md` (ADR-004, ADR-012, ADR-014)
 - `/scripts/tdd_guard.py`
 - `/src/types/auth.ts` (타입 파일의 기존 모양)
 - `/src/lib/auth/validation.ts`, `/src/lib/auth/validation.test.ts` (순수 함수와 테스트의 기존 모양)
@@ -38,8 +38,8 @@ export const MERCHANT_CATEGORIES = [
 ] as const;
 
 // 코드가 직접 붙이는 카테고리. Claude는 이 값을 고르지 않는다.
-export const TRANSFER_CATEGORY = "이체"; // 이체·송금 계열 출금
-export const INCOME_CATEGORY = "수입"; // 모든 입금
+export const TRANSFER_CATEGORY = "이체"; // 은행 내역에서 카드 결제로 확인되지 않은 출금 (이체·송금·자동이체·현금 인출 등)
+export const INCOME_CATEGORY = "수입"; // kind가 income인 모든 거래
 export const FALLBACK_CATEGORY = "기타"; // 분류하지 못한 출금. MERCHANT_CATEGORIES 안의 값이다.
 
 export function isMerchantCategory(value: unknown): value is MerchantCategory;
@@ -62,27 +62,31 @@ export type TransactionKind = "expense" | "income";
 // 파일에서 읽어 정규화한 거래 한 건. 아직 카테고리가 없다.
 export type ParsedTransaction = {
   date: string; // "YYYY-MM-DD". 파일에 적힌 날짜 그대로이며 시간대 변환을 하지 않는다.
+  time: string | null; // "HH:mm". 24시간제이고 두 자리로 채운다. 파일에 시각이 없으면 null.
   merchant: string; // 가맹점명 또는 적요. 빈 문자열일 수 있다.
   amount: number; // 원 단위 정수. 취소·환불은 음수다.
   kind: TransactionKind;
-  isTransfer: boolean; // 이체·송금 계열 거래
+  isTransfer: boolean; // 은행 내역의 출금 중 카드 결제로 확인되지 않은 거래. 이체로 분류하고 LLM에 보내지 않는다.
 };
 
-// 카테고리가 붙은 거래. DB에 저장하는 모양이다.
+// 카테고리가 붙은 거래. time을 뺀 나머지가 DB에 저장된다.
 export type CategorizedTransaction = {
   date: string;
+  time: string | null;
   merchant: string;
   amount: number;
   kind: TransactionKind;
   category: Category;
 };
 
-// DB에서 읽은 거래.
-export type Transaction = CategorizedTransaction & { id: string };
+// DB에서 읽은 거래. time은 저장하지 않으므로 없다.
+export type Transaction = Omit<CategorizedTransaction, "time"> & { id: string };
 ```
 
 - 타입은 `src/types/transaction.ts`에서 export 한다. 타입끼리의 순환 import가 문제가 되면 한쪽에서 정의하고 다른 쪽에서 re-export 해도 된다.
 - `MerchantCategory`는 `MERCHANT_CATEGORIES`에서 파생시켜라. 문자열 유니온을 손으로 다시 적지 마라. 이유: 목록이 두 군데로 갈라지면 한쪽만 고쳐지는 버그가 난다.
+- `time`은 step 7이 중복 판별용 지문을 만드는 데만 쓴다. 이유: 같은 날 같은 곳에서 같은 금액을 쓴 서로 다른 거래가 서로 다른 파일(카드 두 장, 한 계좌를 기간을 나눠 받은 내역 두 개)에 들어 있으면 날짜·내용·금액만으로는 지문이 같아져 나중에 올린 거래가 중복으로 버려진다. 시각이 있으면 둘을 구별할 수 있다 (ADR-014).
+- `time`은 DB에 저장하지 않는다. 그래서 `Transaction`은 `CategorizedTransaction`에서 `time`을 뺀 모양이다.
 
 ### 3. 테스트 (`src/lib/transactions/categories.test.ts`)
 

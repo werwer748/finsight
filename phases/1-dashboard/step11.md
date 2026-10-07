@@ -38,7 +38,8 @@ export const SAMPLE_RANGE: DateRange;
 - `SAMPLE_TRANSACTIONS`는 코드에 직접 적은 고정 배열이다. 난수와 현재 날짜를 쓰지 마라. 이유: 렌더링할 때마다 숫자가 달라지면 안 되고 테스트가 고정돼야 한다.
 - 40~60건, 날짜는 모두 `2026-09-01`부터 `2026-09-30` 사이이고 가장 최근 날짜는 `2026-09-30`이다. 배열은 날짜 내림차순이다.
 - `id`는 `sample-1`, `sample-2`처럼 겹치지 않게 붙인다.
-- 지출 카테고리를 8개 이상 쓰고, 수입 1~2건(`kind: "income"`, `category: "수입"`)과 `이체` 1~2건을 넣는다. 환불(음수 지출) 1건을 넣는다.
+- 지출 카테고리를 8개 이상 쓰고, 수입 1~2건(`kind: "income"`, `category: "수입"`)과 `이체` 1~2건(`kind: "expense"`, `category: "이체"`, 양수 금액)을 넣는다. 환불(음수 지출) 1건을 넣는다.
+- 지출 카테고리 8개는 `MERCHANT_CATEGORIES`의 값으로만 센다. `이체`는 그 목록의 값이 아니라서 세지 않는다. 이유: `이체`는 카테고리 차트에 나오지 않으므로, 세어 넣으면 차트의 막대가 8개보다 적어진다.
 - 금액은 원 단위 정수이고 한 사람의 한 달 소비로 그럴듯한 크기다.
 - 가맹점명은 지어낸 이름을 쓴다 (`모닝커피 역삼점`, `한끼식당` 등). 실제 사람 이름과 실존 브랜드명을 쓰지 마라. 이유: 가상 데이터임이 분명해야 하고 특정 업체를 보여 줄 이유가 없다.
 - `category` 값은 `MERCHANT_CATEGORIES`, `TRANSFER_CATEGORY`, `INCOME_CATEGORY`의 값만 쓴다.
@@ -75,9 +76,9 @@ export function SampleBanner(): JSX.Element;
   - 모든 `date`가 `YYYY-MM-DD` 형식이고 `2026-09-01`~`2026-09-30` 안이며 내림차순이다.
   - 모든 `amount`가 정수다.
   - 모든 `category`가 허용된 값이다. 수입 거래의 카테고리는 `수입`이고 지출 거래의 카테고리는 `수입`이 아니다.
-  - 지출 카테고리가 8종류 이상이다.
+  - 지출 거래에 쓰인 `MERCHANT_CATEGORIES`의 값이 8종류 이상이다 (`이체`는 세지 않는다).
   - `SAMPLE_RANGE`의 `to`가 가장 최근 날짜이고, 모든 거래가 그 기간 안에 들어 있다.
-  - `summarize` 결과의 `totalExpense`와 `totalIncome`이 0보다 크다.
+  - `summarize` 결과의 `totalExpense`, `totalIncome`, `totalTransfer`가 모두 0보다 크다.
 - `src/components/landing/sample-banner.test.tsx`: 문구와 `/signup` 링크.
 - `src/components/landing/hero.test.tsx`: `샘플 먼저 보기` 링크가 `/sample`로 간다. 기존 테스트는 그대로 통과해야 한다.
 - `src/app/sample/page.test.tsx`: h1 `샘플 대시보드`, 배너 문구, `총 지출`, `카테고리별 지출`, `거래 내역`이 보이고 `올리기` 버튼은 없다.

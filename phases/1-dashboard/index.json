@@ -13,6 +13,7 @@
     { "step": 8, "name": "upload-api", "status": "pending" },
     { "step": 9, "name": "dashboard-ui", "status": "pending" },
     { "step": 10, "name": "dashboard-page", "status": "pending" },
-    { "step": 11, "name": "sample-demo", "status": "pending" }
+    { "step": 11, "name": "sample-demo", "status": "pending" },
+    { "step": 12, "name": "apply-migration", "status": "pending" }
   ]
 }
