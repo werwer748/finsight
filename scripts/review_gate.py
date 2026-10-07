@@ -29,7 +29,7 @@ COUNTS = re.compile(r"^🔴 (\d+) · 🟠 (\d+) · 🟡 (\d+)", re.MULTILINE)
 REJECT_MIN_DANGER = 2
 AUTO_MERGE_MAX_CAUTION = 2
 DECISION_NOTES = {
-    "merge": "자동 머지 — lint·build·test가 통과하면 머지합니다. 리뷰·CI 설정이나 의존성을 고친 PR은 직접 머지합니다.",
+    "merge": "자동 머지 대상 — lint·build·test가 통과하면 머지합니다. 리뷰·CI 설정이나 의존성을 고친 PR은 직접 머지합니다.",
     "hold": "직접 판단 — 자동으로 머지하지 않습니다.",
     "reject": f"거절 — 🔴 위험이 {REJECT_MIN_DANGER}건 이상이라 PR을 닫습니다. 고친 뒤 다시 열면 리뷰가 다시 돕니다.",
 }

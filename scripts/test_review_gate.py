@@ -208,6 +208,14 @@ class TestSkip:
             gate.main(["--staged"])
         assert mock_run.call_args_list[0][0][0] == ["git", "diff", "--cached", "--name-only", "-z"]
 
+    def test_skipped_review_writes_no_decision(self, monkeypatch, tmp_path):
+        # 판정이 없으면 워크플로우는 머지도 닫기도 하지 않는다.
+        monkeypatch.setenv("SKIP_REVIEW", "1")
+        out_file = tmp_path / "github_output"
+        with patch("subprocess.run", fake_run(result=report("🟢"))):
+            assert gate.main(["--base", "origin/main", "--decision-output", str(out_file)]) == 0
+        assert not out_file.exists()
+
     def test_base_mode_does_not_filter_by_staged_files(self):
         with patch("subprocess.run", fake_run(staged="", result=report("🟢"))) as mock_run:
             assert gate.main(["--base", "origin/main"]) == 0
@@ -403,7 +411,14 @@ class TestWorkflow:
         assert "github.base_ref == github.event.repository.default_branch" in self.text
 
     def test_lists_old_paths_of_moved_files(self):
-        assert "previous_filename" in self.text
+        # CLAUDE.md를 docs/로 옮긴 PR도 보호 경로를 고친 것으로 봐야 한다.
+        expression = re.search(r"--jq '([^']+)'", self.text).group(1)
+        files = [
+            {"filename": "docs/moved.md", "previous_filename": "CLAUDE.md", "status": "renamed"},
+            {"filename": "src/lib/a.ts", "status": "modified"},
+        ]
+        r = subprocess.run(["jq", "-r", expression], input=json.dumps(files), capture_output=True, text=True)
+        assert r.stdout.splitlines() == ["docs/moved.md", "CLAUDE.md", "src/lib/a.ts"]
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +467,7 @@ class TestMergeStep:
         ".githooks/pre-commit",
         ".claude/settings.json",
         ".claude/skills/review-code/SKILL.md",
+        ".codex/hooks.json",
         "scripts/review_gate.py",
         "CLAUDE.md",
         "CLAUDE.local.md",
