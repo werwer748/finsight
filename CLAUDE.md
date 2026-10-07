@@ -26,6 +26,8 @@
 ## 개발 프로세스
 - CRITICAL: 새 기능 구현 시 반드시 테스트를 먼저 작성하고, 테스트가 통과하는 구현을 작성할 것 (TDD)
 - 커밋 메시지는 conventional commits 형식을 따를 것 (feat:, fix:, docs:, refactor:)
+- `git commit`을 하면 pre-commit 훅이 staged 변경에 `/review-code`를 돌린다. 길면 9분 걸리므로 Bash 제한 시간을 10분으로 준다. 🔴 판정이면 커밋이 막히니 보고를 읽고 고친 뒤 다시 커밋한다. `--no-verify`나 `SKIP_REVIEW=1`로 우회하지 않는다. 문서만 바꾼 커밋은 리뷰를 건너뛴다.
+- PR을 올리면 GitHub Action이 브랜치 전체에 `/review-code`를 돌려 PR 댓글로 남긴다. 🔴나 🟠 판정이면 체크가 실패한다.
 
 ## 명령어
 npm run dev      # 개발 서버

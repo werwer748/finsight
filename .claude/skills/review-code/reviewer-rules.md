@@ -13,10 +13,12 @@
 - 변경 내용은 `git diff <merge-base> -- <파일>`로 본다. 맥락이 필요하면 Read로 파일 전체와 호출부를 읽는다.
 - 추적되지 않는 새 파일은 diff에 나오지 않는다. Read로 전체를 읽는다.
 - 삭제된 파일(`D`)은 Read할 수 없다. 필요하면 `git show <merge-base>:<경로>`로 본다.
+- 프롬프트에 `범위: staged`가 있으면 커밋하려고 staged한 변경만 리뷰한다. 변경 내용은 `git diff --cached -- <파일>`로 본다. Read는 작업 트리를 보여 주므로 staged된 본문 전체가 필요하면 `git show :<경로>`로 본다. staged되지 않은 변경은 지적하지 않는다.
 - 생성 파일(`package-lock.json`)과 바이너리(`.ico`, 이미지)는 읽지 않는다. 의존성 변경은 `package.json`의 diff로 본다.
 - 변경 파일 목록에서 맡은 차원과 관계있는 파일만 골라 읽는다. 전부 읽지 않는다.
 - 체크리스트의 "읽을 문서"는 적힌 절만 읽는다. 문서 전체를 읽지 않는다.
 - Bash는 읽기 전용 명령에만 쓴다: `git diff`, `git log`, `git show`와 검색(`grep`, `rg`, `find`, `ls`).
+- `for` 반복문, `$(…)` 치환, `git -C <경로>`는 쓰지 않는다. 훅과 CI의 헤드리스 실행에서 거부된다. 파일 내용은 Read로 읽는다.
 - `scripts/bash_guard.py`가 `DROP TABLE` 같은 문자열이 든 Bash 명령을 막는다. 검색이 막히면 Read로 파일을 직접 읽는다.
 
 ## 하지 않는 것

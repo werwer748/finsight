@@ -1,0 +1,3 @@
+#!/bin/sh
+# Claude Code의 Bash 제한 시간(최대 10분)보다 먼저 끝나도록 9분에서 멈춘다. 그때는 경고만 하고 커밋을 통과시킨다.
+exec python3 "$(git rev-parse --show-toplevel)/scripts/review_gate.py" --staged --fail-on danger --timeout 540

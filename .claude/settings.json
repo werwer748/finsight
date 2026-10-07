@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -f \"$CLAUDE_PROJECT_DIR/package.json\" ] || exit 0; [ \"$(jq -r .stop_hook_active)\" = true ] && exit 0; out=$(npm run lint 2>&1 && npm run build 2>&1 && npm run test 2>&1) || { echo \"$out\" | tail -n 40 >&2; exit 2; }"
+            "command": "[ -n \"$REVIEW_GATE_ACTIVE\" ] && exit 0; [ -f \"$CLAUDE_PROJECT_DIR/package.json\" ] || exit 0; [ \"$(jq -r .stop_hook_active)\" = true ] && exit 0; out=$(npm run lint 2>&1 && npm run build 2>&1 && npm run test 2>&1) || { echo \"$out\" | tail -n 40 >&2; exit 2; }"
           }
         ]
       }

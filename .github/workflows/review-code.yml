@@ -1,0 +1,41 @@
+name: review-code
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: review-code-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review-code:
+    # 포크 PR은 시크릿을 받지 못하므로 건너뛴다.
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # 스킬이 origin/<base>와의 merge-base를 계산한다.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Review
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          BASE_REF: ${{ github.base_ref }}
+        # 보고를 작업 폴더에 쓰면 스킬이 추적되지 않는 새 파일로 보고 리뷰 대상에 넣는다.
+        run: python3 scripts/review_gate.py --base "origin/$BASE_REF" --fail-on warning --strict > "$RUNNER_TEMP/review.md"
+      - name: Comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file "$RUNNER_TEMP/review.md" --edit-last --create-if-none
