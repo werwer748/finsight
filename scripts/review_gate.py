@@ -29,7 +29,7 @@ COUNTS = re.compile(r"^🔴 (\d+) · 🟠 (\d+) · 🟡 (\d+)", re.MULTILINE)
 REJECT_MIN_DANGER = 2
 AUTO_MERGE_MAX_CAUTION = 2
 DECISION_NOTES = {
-    "merge": "자동 머지 — lint·build·test가 통과하면 머지합니다.",
+    "merge": "자동 머지 — lint·build·test가 통과하면 머지합니다. 리뷰·CI 설정을 고친 PR은 직접 머지합니다.",
     "hold": "직접 판단 — 자동으로 머지하지 않습니다.",
     "reject": f"거절 — 🔴 위험이 {REJECT_MIN_DANGER}건 이상이라 PR을 닫습니다. 고친 뒤 다시 열면 리뷰가 다시 돕니다.",
 }
@@ -44,6 +44,9 @@ SECRET = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
 
 def parse_report(report: str) -> Tuple[Optional[str], bool]:
     """(판정 단계, 리뷰에 실패한 차원이 있는가). 판정 줄을 읽을 수 없으면 단계는 None이다."""
+    # 실패한 실행의 출력에 판정 줄이 섞여 있어도 판정으로 치지 않는다.
+    if report.startswith(NOT_RUN):
+        return None, False
     m = VERDICT.search(report)
     if m:
         return m.group(1), "리뷰 실패" in m.group(2)

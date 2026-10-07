@@ -6,6 +6,7 @@ claude와 git은 실제로 띄우지 않고 subprocess.run을 mock으로 대체�
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -56,6 +57,9 @@ class TestParseReport:
     @pytest.mark.parametrize("text", ["", "API Error: 529", "## 리뷰 결과: ⚫ 리뷰를 실행하지 못했습니다"])
     def test_unreadable_report_has_no_stage(self, text):
         assert gate.parse_report(text)[0] is None
+
+    def test_failed_run_has_no_stage_even_with_a_report_inside(self):
+        assert gate.parse_report(f"{gate.NOT_RUN}\n\n{report('🟢')}") == (None, False)
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +316,13 @@ class TestMain:
             gate.main(["--base", "origin/main", "--strict", "--decision-output", str(out_file)])
         assert out_file.read_text(encoding="utf-8") == "decision=hold\n"
 
+    def test_failed_run_is_held_even_with_a_clean_report_inside(self, tmp_path):
+        out_file = tmp_path / "github_output"
+        with patch("subprocess.run", fake_run(result=report("🟢"), returncode=1)):
+            code = gate.main(["--base", "origin/main", "--strict", "--decision-output", str(out_file)])
+        assert code == 1
+        assert out_file.read_text(encoding="utf-8") == "decision=hold\n"
+
     def test_no_decision_note_without_decision_output(self, capsys):
         with patch("subprocess.run", fake_run(result=report("🟢"))):
             gate.main(["--staged"])
@@ -372,10 +383,33 @@ class TestPreCommitHook:
 # ---------------------------------------------------------------------------
 
 class TestWorkflow:
-    def test_review_step_writes_decision_to_step_output(self):
-        assert '--decision-output "$GITHUB_OUTPUT"' in WORKFLOW.read_text(encoding="utf-8")
+    text = WORKFLOW.read_text(encoding="utf-8")
 
-    def test_merges_only_the_reviewed_commit(self):
-        text = WORKFLOW.read_text(encoding="utf-8")
-        assert "gh pr merge" in text
-        assert "--match-head-commit" in text
+    def test_review_step_writes_decision_to_job_output(self):
+        assert '--decision-output "$GITHUB_OUTPUT"' in self.text
+        assert "decision: ${{ steps.review.outputs.decision }}" in self.text
+
+    def test_closes_only_on_reject(self):
+        assert "if: always() && steps.review.outputs.decision == 'reject'" in self.text
+        assert self.text.count("gh pr close") == 1
+
+    def test_auto_merge_waits_for_review_and_tests(self):
+        assert "needs: [review-code, test]" in self.text
+        assert "if: ${{ needs.review-code.outputs.decision == 'merge' }}" in self.text
+
+    def test_merges_only_the_reviewed_commit_on_the_reviewed_base(self):
+        assert self.text.count("gh pr merge") == 1
+        assert '--match-head-commit "$HEAD_SHA"' in self.text
+        assert '!= "$BASE_REF"' in self.text
+
+    def test_does_not_auto_merge_changes_to_review_and_ci_setup(self):
+        # 이 파일들을 고친 PR은 고친 판으로 자기 자신을 심사한 것이다.
+        pattern = re.search(r"PROTECTED: '(.+)'", self.text).group(1)
+        assert 'grep -qE "$PROTECTED"' in self.text
+        for path in [
+            ".github/workflows/review-code.yml", ".githooks/pre-commit", ".claude/settings.json",
+            ".claude/skills/review-code/SKILL.md", "scripts/review_gate.py", "CLAUDE.md", "package.json",
+        ]:
+            assert re.search(pattern, path), path
+        for path in ["src/lib/a.ts", "src/scripts/a.ts", "docs/ADR.md", "docs/CLAUDE.md", "package-lock.json"]:
+            assert not re.search(pattern, path), path

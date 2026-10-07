@@ -83,5 +83,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        # 리뷰한 커밋 뒤에 push가 있었으면 머지하지 않는다.
-        run: gh pr merge "$PR_URL" --merge --match-head-commit "$HEAD_SHA"
+          BASE_REF: ${{ github.base_ref }}
+          # 리뷰 규칙·게이트·CI 설정. 이걸 고친 PR은 고친 판으로 자기 자신을 심사한 것이므로 사람이 머지한다.
+          # 이 검사는 PR이 함께 고칠 수 있는 scripts/에 두지 않고 여기에 둔다.
+          PROTECTED: '^(\.github/|\.githooks/|\.claude/|scripts/|CLAUDE\.md$|package\.json$)'
+        run: |
+          files=$(gh pr diff "$PR_URL" --name-only)
+          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE "$PROTECTED"; then
+            echo "::notice::리뷰·CI 설정을 고친 PR이라 자동 머지하지 않습니다. 직접 머지하세요."
+            exit 0
+          fi
+          # 리뷰한 뒤에 base 브랜치가 바뀌었으면 머지하지 않는다.
+          if [ "$(gh pr view "$PR_URL" --json baseRefName --jq .baseRefName)" != "$BASE_REF" ]; then
+            echo "::notice::리뷰한 뒤 base 브랜치가 바뀌어 자동 머지하지 않습니다."
+            exit 0
+          fi
+          # 리뷰한 커밋 뒤에 push가 있었으면 머지하지 않는다.
+          gh pr merge "$PR_URL" --merge --match-head-commit "$HEAD_SHA"
