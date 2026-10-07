@@ -1,6 +1,6 @@
 # scripts/
 
-하네스 실행기와 훅 가드가 들어 있는 폴더. 앱 코드(`src/`)와 달리 Python 표준 라이브러리만 쓴다.
+하네스 실행기, 훅 가드, 리뷰 게이트가 들어 있는 폴더. 앱 코드(`src/`)와 달리 Python 표준 라이브러리만 쓴다.
 
 ## 파일
 
@@ -9,19 +9,21 @@
 | `execute.py` | phase의 step을 순서대로 실행한다. step마다 `codex exec`를 새 프로세스로 띄우고 재시도, 커밋, 타임스탬프 기록을 맡는다. |
 | `tdd_guard.py` | 파일 수정 전 훅. 대응 테스트가 먼저 변경되지 않은 구현 파일 수정을 막는다. |
 | `bash_guard.py` | 셸 실행 전 훅. 되돌리기 어려운 명령어 패턴을 막는다. |
-| `test_*.py` | 위 세 파일의 pytest 테스트. |
+| `review_gate.py` | `/review-code` 스킬을 헤드리스로 돌리고 판정에 따라 커밋·PR을 막는다. pre-commit 훅과 GitHub Action이 같이 쓴다. |
+| `test_*.py` | 위 네 파일의 pytest 테스트. |
 
 ## 명령어
 
 ```bash
 python3 scripts/execute.py <phase-dir> [--push]   # phase 실행
+python3 scripts/review_gate.py --staged           # staged 변경 리뷰 (pre-commit 훅이 실행)
 python3 -m pytest scripts                         # 테스트
 ```
 
 ## 규칙
 
 - 테스트를 먼저 고친다. 테스트는 같은 폴더의 `test_<이름>.py`에 둔다.
-- 테스트에서 `codex`와 `git` 프로세스를 실제로 띄우지 않는다. `subprocess.run`을 mock으로 대체한다.
+- 테스트에서 `codex`, `claude`, `git` 프로세스를 실제로 띄우지 않는다. `subprocess.run`을 mock으로 대체한다.
 - 훅 스크립트는 stdin으로 JSON을 받는다. 막을 때는 stderr에 사유를 쓰고 exit 2, 통과면 아무것도 출력하지 않고 exit 0 한다.
 - 훅 스크립트는 Claude Code와 Codex의 입력 형식을 모두 받아야 한다.
   - 파일 수정: Claude Code는 `tool_input.file_path`, Codex는 `tool_input.command`에 패치 본문(`*** Add File: <경로>`, `*** Update File: <경로>`)을 준다.
@@ -35,4 +37,8 @@ python3 -m pytest scripts                         # 테스트
 - step 성공 조건은 `phases/<phase>/index.json`의 status가 `completed`이고 Codex 종료 코드가 0인 것이다. 하나라도 아니면 재시도한다.
 - `phases/**/step*-output.json`은 실행 로그이며 커밋하지 않는다. 프롬프트 전문은 로그와 `index.json`에 남기지 않는다.
 - `tdd_guard.py`는 프로젝트 루트를 환경변수 `CLAUDE_PROJECT_DIR`에서 읽고, 없으면 훅 입력의 `cwd`를 쓴다. Codex 훅은 이 변수를 git 루트로 채워서 호출한다.
+- `review_gate.py`는 `.githooks/pre-commit`과 `.github/workflows/review-code.yml`이 실행한다. git 훅은 `core.hooksPath`가 `.githooks`일 때만 돌고, `npm install`의 `prepare` 스크립트가 이 값을 설정한다.
+- `SKIP_REVIEW=1`이면 `review_gate.py`가 리뷰를 건너뛴다. `execute.py`가 step 커밋을 위해 세운다. step에서 만든 코드는 PR 단계에서 한 번에 리뷰한다.
+- `REVIEW_GATE_ACTIVE=1`은 `review_gate.py`가 리뷰 세션에 세우는 값이다. `.claude/settings.json`의 Stop 훅이 이 값을 보고 lint·build·test를 건너뛴다.
+- `review_gate.py`는 로컬에서 리뷰를 끝내지 못하면 경고만 하고 통과시킨다. CI는 `--strict`로 실패시킨다.
 - Codex는 루트에서 실행 폴더까지의 `AGENTS.md`만 자동으로 읽는다. 저장소 루트에서 실행한 세션은 이 파일을 자동으로 읽지 않는다.

@@ -1,0 +1,2 @@
+#!/bin/sh
+exec python3 "$(git rev-parse --show-toplevel)/scripts/review_gate.py" --staged --fail-on danger

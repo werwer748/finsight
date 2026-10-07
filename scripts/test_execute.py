@@ -777,6 +777,15 @@ class TestMainCli:
                     ex.main()
                 assert exc_info.value.code == 1
 
+    def test_steps_run_with_review_skipped(self, monkeypatch):
+        monkeypatch.setenv("SKIP_REVIEW", "0")
+        seen = {}
+        with patch("sys.argv", ["execute.py", "0-mvp"]):
+            with patch.object(ex, "StepExecutor") as mock_cls:
+                mock_cls.return_value.run.side_effect = lambda: seen.update(skip=os.environ["SKIP_REVIEW"])
+                ex.main()
+        assert seen == {"skip": "1"}
+
 
 # ---------------------------------------------------------------------------
 # _check_blockers (= 이전 main() error/blocked 체크)
