@@ -23,9 +23,11 @@ NOT_RUN = "## 리뷰 결과: ⚫ 리뷰를 실행하지 못했습니다"
 BLOCKING = {"danger": ("🔴",), "warning": ("🔴", "🟠")}
 DOC_DIRS = ("docs/", "phases/")
 CLAUDE_TIMEOUT = 1500
-# git diff·log·show, grep, rg, find, ls 같은 읽기 전용 명령은 규칙 없이도 dontAsk에서 실행된다.
-# Bash 규칙을 넓게 주면 git push나 find -delete까지 열리므로 merge-base 하나만 더한다.
-ALLOWED_TOOLS = ["Read", "Agent", "Bash(git merge-base *)"]
+# 프로젝트 안의 파일 읽기와 읽기 전용 명령(git diff·log·show, grep, rg, find, ls)은 규칙 없이도 dontAsk에서 실행된다.
+# Read나 Bash 규칙을 넓게 주면 프로젝트 밖 파일(/proc의 환경변수 등)과 git push까지 열리므로 더하지 않는다.
+ALLOWED_TOOLS = ["Agent", "Bash(git merge-base *)"]
+# 보고는 PR 댓글로 공개되므로 토큰처럼 보이는 문자열은 가린다.
+SECRET = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
 
 
 def parse_report(report: str) -> Tuple[Optional[str], bool]:
@@ -113,7 +115,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     print("REVIEW GATE: /review-code 실행 중입니다. 몇 분 걸립니다.", file=sys.stderr)
-    report = run_review("--staged" if args.staged else args.base, args.timeout)
+    report = SECRET.sub("sk-ant-***", run_review("--staged" if args.staged else args.base, args.timeout))
     print(report)
 
     stage, failed = parse_report(report)

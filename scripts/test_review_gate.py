@@ -173,9 +173,10 @@ class TestClaudeInvocation:
         _, kwargs = self.run_main(["--staged", "--timeout", "540"], monkeypatch)
         assert kwargs["timeout"] == 540
 
-    def test_allows_only_reading_and_the_merge_base_lookup(self, monkeypatch):
+    def test_allows_only_subagents_and_the_merge_base_lookup(self, monkeypatch):
+        # Read 규칙이 있으면 프로젝트 밖 파일(/proc의 환경변수 등)까지 읽힌다.
         cmd, _ = self.run_main(["--staged"], monkeypatch)
-        assert cmd[cmd.index("--allowedTools") + 1:] == ["Read", "Agent", "Bash(git merge-base *)"]
+        assert cmd[cmd.index("--allowedTools") + 1:] == ["Agent", "Bash(git merge-base *)"]
 
     def test_child_env_marks_review_session_and_drops_nesting_flag(self, monkeypatch):
         _, kwargs = self.run_main(["--staged"], monkeypatch)
@@ -213,6 +214,14 @@ class TestMain:
 
         with patch("subprocess.run", fake_run(**failure)):
             assert gate.main(["--staged", "--strict"]) == 1
+
+    def test_token_like_strings_are_masked_in_report(self, capsys):
+        leaked = report("🟡") + "- 환경변수 값: sk-ant-oat01-AbC_123-xyz\n"
+        with patch("subprocess.run", fake_run(result=leaked)):
+            assert gate.main(["--staged"]) == 0
+        out = capsys.readouterr().out
+        assert "sk-ant-oat01" not in out
+        assert VERDICT_LINES["🟡"] in out
 
     def test_requires_staged_or_base(self):
         with pytest.raises(SystemExit) as exc_info:
