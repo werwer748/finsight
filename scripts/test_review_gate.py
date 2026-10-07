@@ -7,6 +7,7 @@ claude와 git은 실제로 띄우지 않고 subprocess.run을 mock으로 대체�
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -410,6 +411,7 @@ class TestWorkflow:
         # base가 다른 PR을 리뷰한 뒤 base를 main으로 바꿔 리뷰하지 않은 커밋을 넣지 못하게 한다.
         assert "github.base_ref == github.event.repository.default_branch" in self.text
 
+    @pytest.mark.skipif(shutil.which("jq") is None, reason="jq 필요")
     def test_lists_old_paths_of_moved_files(self):
         # CLAUDE.md를 docs/로 옮긴 PR도 보호 경로를 고친 것으로 봐야 한다.
         expression = re.search(r"--jq '([^']+)'", self.text).group(1)
