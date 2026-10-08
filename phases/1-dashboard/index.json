@@ -101,7 +101,9 @@
     {
       "step": 12,
       "name": "apply-migration",
-      "status": "pending"
+      "status": "blocked",
+      "blocked_reason": "DB 마이그레이션 적용 확인이 필요합니다. 적용하기 전에는 이 브랜치를 직접 push 하거나 배포하지 마세요. (1) 배포된 앱이 쓰는 Supabase 프로젝트의 SQL 에디터에서 supabase/migrations/20261007000000_dashboard.sql 의 내용 전체를 실행하세요. 이미 적용했다면 (2)부터 하세요. (2) 같은 곳에서 select to_regclass('public.transactions'), to_regclass('public.merchant_categories'), to_regclass('public.uploads'); 를 실행해 세 값이 모두 null이 아닌지 확인하세요. (3) phases/1-dashboard/index.json 의 step 12 항목에 migration_applied: true 를 추가하고(키에는 다른 키처럼 큰따옴표를 붙이고 true에는 붙이지 않습니다), status를 pending으로 되돌리고, blocked_reason을 지우세요. (4) python3 scripts/execute.py 1-dashboard 를 다시 실행하세요(처음에 --push를 붙였다면 이번에도 붙이세요).",
+      "started_at": "2026-10-08T17:19:32+0900"
     }
   ],
   "created_at": "2026-10-08T15:35:27+0900"
