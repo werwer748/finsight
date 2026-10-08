@@ -7,7 +7,8 @@
       "name": "transaction-types",
       "status": "completed",
       "summary": "src/lib/transactions/categories.ts: MERCHANT_CATEGORIES, TRANSFER_CATEGORY, INCOME_CATEGORY, FALLBACK_CATEGORY, isMerchantCategory; categories.test.ts 검증; src/types/transaction.ts: MerchantCategory, Category, TransactionKind, ParsedTransaction, CategorizedTransaction, Transaction 정의",
-      "started_at": "2026-10-08T15:35:27+0900"
+      "started_at": "2026-10-08T15:35:27+0900",
+      "completed_at": "2026-10-08T15:39:35+0900"
     },
     {
       "step": 1,
