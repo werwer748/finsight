@@ -21,7 +21,9 @@
     {
       "step": 2,
       "name": "row-normalizer",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T15:53:12+0900",
+      "summary": "src/lib/parser/normalize.ts: normalizeRows(grid: SheetGrid): ParsedTransaction[]; 첫 30행의 키워드·제외어·열 역할 중복 방지로 헤더 탐색, 출금·입금 쌍은 은행 이중 금액형·선택된 날짜/내용/금액 헤더의 카드 키워드는 카드형·나머지는 은행 단일 금액형; 은행 단일 금액은 방향 우선·부호 보조와 절댓값, 카드 금액은 부호 유지, 체크카드 취소 입금은 음수 지출; 은행 거래구분에 체크가 있을 때만 isTransfer false(카드는 모두 false); 날짜 YYYY-MM-DD와 time HH:mm 또는 null을 시간대 없이 정규화, normalize.test.ts 68개 및 전체 AC 통과"
     },
     {
       "step": 3,
