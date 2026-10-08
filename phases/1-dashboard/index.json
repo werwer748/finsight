@@ -31,7 +31,8 @@
       "name": "merchant-classifier",
       "status": "completed",
       "summary": "src/lib/classify/merchant-key.ts: toMerchantKey 공백 정리·숫자 4개 이상 구간 마스킹; classify-transactions.ts: ClassifyDeps(loadCache/classify/saveCache) 주입, ClassifyResult(transactions/unclassified) 반환; 입금·이체·빈 키는 외부 전달 제외, 키만 중복 없이 분류·유효 응답만 캐시 저장, 원문·time 보존 및 개인정보 없는 오류 기록; 신규 테스트 25개와 전체 AC 통과",
-      "started_at": "2026-10-08T16:08:12+0900"
+      "started_at": "2026-10-08T16:08:12+0900",
+      "completed_at": "2026-10-08T16:13:28+0900"
     },
     {
       "step": 4,
