@@ -2,18 +2,73 @@
   "project": "FinSight",
   "phase": "1-dashboard",
   "steps": [
-    { "step": 0, "name": "transaction-types", "status": "pending" },
-    { "step": 1, "name": "sheet-reader", "status": "pending" },
-    { "step": 2, "name": "row-normalizer", "status": "pending" },
-    { "step": 3, "name": "merchant-classifier", "status": "pending" },
-    { "step": 4, "name": "dashboard-aggregate", "status": "pending" },
-    { "step": 5, "name": "claude-service", "status": "pending" },
-    { "step": 6, "name": "db-schema", "status": "pending" },
-    { "step": 7, "name": "transaction-store", "status": "pending" },
-    { "step": 8, "name": "upload-api", "status": "pending" },
-    { "step": 9, "name": "dashboard-ui", "status": "pending" },
-    { "step": 10, "name": "dashboard-page", "status": "pending" },
-    { "step": 11, "name": "sample-demo", "status": "pending" },
-    { "step": 12, "name": "apply-migration", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "transaction-types",
+      "status": "completed",
+      "summary": "src/lib/transactions/categories.ts: MERCHANT_CATEGORIES, TRANSFER_CATEGORY, INCOME_CATEGORY, FALLBACK_CATEGORY, isMerchantCategory; categories.test.ts 검증; src/types/transaction.ts: MerchantCategory, Category, TransactionKind, ParsedTransaction, CategorizedTransaction, Transaction 정의",
+      "started_at": "2026-10-08T15:35:27+0900"
+    },
+    {
+      "step": 1,
+      "name": "sheet-reader",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "row-normalizer",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "merchant-classifier",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "dashboard-aggregate",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "claude-service",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "db-schema",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "transaction-store",
+      "status": "pending"
+    },
+    {
+      "step": 8,
+      "name": "upload-api",
+      "status": "pending"
+    },
+    {
+      "step": 9,
+      "name": "dashboard-ui",
+      "status": "pending"
+    },
+    {
+      "step": 10,
+      "name": "dashboard-page",
+      "status": "pending"
+    },
+    {
+      "step": 11,
+      "name": "sample-demo",
+      "status": "pending"
+    },
+    {
+      "step": 12,
+      "name": "apply-migration",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-10-08T15:35:27+0900"
 }
