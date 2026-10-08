@@ -47,7 +47,8 @@
       "name": "claude-service",
       "status": "completed",
       "summary": "src/services/claude.ts: classifyMerchants(merchants: string[]): Promise<Map<string, MerchantCategory>>, claude-haiku-4-5 structured outputs로 중복 제거 후 50개씩 분류, 최대 동시 5개·전체 40초 예산과 공유 AbortController 적용, 배치 실패·시간 초과 시 성공 결과만 반환하고 개인정보 없는 로그 기록; claude.test.ts 신규 mock 테스트 15개와 전체 328개·AC 통과; @anthropic-ai/sdk·zod 설치, .env.example의 기존 ANTHROPIC_API_KEY= 유지(새 환경변수 없음)",
-      "started_at": "2026-10-08T16:18:03+0900"
+      "started_at": "2026-10-08T16:18:03+0900",
+      "completed_at": "2026-10-08T16:32:22+0900"
     },
     {
       "step": 6,
