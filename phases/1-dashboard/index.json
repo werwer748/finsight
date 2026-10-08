@@ -39,7 +39,8 @@
       "name": "dashboard-aggregate",
       "status": "completed",
       "started_at": "2026-10-08T16:13:28+0900",
-      "summary": "src/types/dashboard.ts: DateRange, CategoryTotal, DashboardSummary; src/lib/dashboard/period.ts: recentMonthRange(latestDate: string): DateRange — 최근 거래일 기준 전월 동일일(없으면 말일)의 다음 날부터 UTC 계산; summarize.ts: summarize(readonly Pick<CategorizedTransaction, \"amount\" | \"kind\" | \"category\">[]): DashboardSummary — 이체는 totalExpense·categories에서 제외하고 totalTransfer로 합산, 환불·양수 카테고리 정렬·비율 반영; src/lib/format.ts: formatWon(amount: number): string, formatDate(date: string): string; 신규 테스트 19개 및 전체 AC 통과"
+      "summary": "src/types/dashboard.ts: DateRange, CategoryTotal, DashboardSummary; src/lib/dashboard/period.ts: recentMonthRange(latestDate: string): DateRange — 최근 거래일 기준 전월 동일일(없으면 말일)의 다음 날부터 UTC 계산; summarize.ts: summarize(readonly Pick<CategorizedTransaction, \"amount\" | \"kind\" | \"category\">[]): DashboardSummary — 이체는 totalExpense·categories에서 제외하고 totalTransfer로 합산, 환불·양수 카테고리 정렬·비율 반영; src/lib/format.ts: formatWon(amount: number): string, formatDate(date: string): string; 신규 테스트 19개 및 전체 AC 통과",
+      "completed_at": "2026-10-08T16:18:03+0900"
     },
     {
       "step": 5,
