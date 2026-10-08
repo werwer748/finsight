@@ -74,7 +74,7 @@ describe("UploadForm", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("업로드를 처리하지 못했어요. 잠시 후 다시 시도해 주세요.");
     expect(refresh).not.toHaveBeenCalled();
   });
-  it.each([{}, null, { total: 1, inserted: "1", duplicates: 0, unclassified: 0 }])("200이어도 저장 건수가 없는 본문이면 일반 오류를 알리고 화면은 갱신하지 않는다", async (body) => {
+  it.each([{}, null, ...["1", -1, 1.5].map((inserted) => ({ total: 1, inserted, duplicates: 0, unclassified: 0 }))])("200이어도 저장 건수가 없는 본문이면 일반 오류를 알리고 화면은 갱신하지 않는다", async (body) => {
     fetchMock.mockResolvedValue({ status: 200, json: async () => body });
     render(<UploadForm />);
     await submit();

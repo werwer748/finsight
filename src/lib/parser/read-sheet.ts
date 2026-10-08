@@ -141,12 +141,18 @@ function cellString(cell: XLSX.CellObject | undefined, date1904: boolean): strin
 }
 
 function firstGrid(book: XLSX.WorkBook): SheetGrid | undefined {
+  let cells = 0;
   for (const name of book.SheetNames) {
     const sheet = book.Sheets[name];
     if (!sheet?.["!ref"]) continue;
     const region = XLSX.utils.decode_range(sheet["!ref"]);
-    // SheetJS는 파일이 선언한 범위를 실제 셀과 맞춰 보지 않으므로 순회하기 전에 칸 수를 제한한다.
-    if ((region.e.r - region.s.r + 1) * (region.e.c - region.s.c + 1) > MAX_CELLS) throw new ParseError(TOO_LARGE_MESSAGE);
+    const rows = region.e.r - region.s.r + 1;
+    const cols = region.e.c - region.s.c + 1;
+    // 셀이 없는 시트는 범위가 뒤집혀 나오기도 한다.
+    if (rows <= 0 || cols <= 0) continue;
+    // SheetJS는 파일이 선언한 범위를 실제 셀과 맞춰 보지 않으므로 순회하기 전에 칸 수를 제한한다. 시트를 합쳐서 센다.
+    cells += rows * cols;
+    if (cells > MAX_CELLS) throw new ParseError(TOO_LARGE_MESSAGE);
     const grid: SheetGrid = [];
     for (let row = region.s.r; row <= region.e.r; row++) {
       const values: string[] = [];

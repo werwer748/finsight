@@ -14,7 +14,10 @@ const PROCESSING_ERROR = "업로드를 처리하지 못했어요. 잠시 후 다
 function isUploadResult(data: unknown): data is UploadResult {
   if (typeof data !== "object" || data === null) return false;
   const record = data as Record<string, unknown>;
-  return ["total", "inserted", "duplicates", "unclassified"].every((key) => Number.isInteger(record[key]));
+  return ["total", "inserted", "duplicates", "unclassified"].every((key) => {
+    const value = record[key];
+    return typeof value === "number" && Number.isInteger(value) && value >= 0;
+  });
 }
 
 function errorMessage(data: unknown): string {

@@ -33,13 +33,14 @@ function declareRange(data: Uint8Array, ref: string): Uint8Array {
   XLSX.CFB.utils.cfb_add(file, file.FullPaths[index], Buffer.from(xml.replace(/<dimension ref="[^"]*"\/>/, `<dimension ref="${ref}"/>`)));
   return new Uint8Array(XLSX.CFB.write(file, { fileType: "zip", type: "buffer" }));
 }
-function declareBiffSize(data: Uint8Array, rows: number, cols: number): Uint8Array {
+function declareBiffSize(data: Uint8Array, rows: number, cols: number, firstCol = 0): Uint8Array {
   const file = XLSX.CFB.read(Buffer.from(data), { type: "buffer" });
   const entry = XLSX.CFB.find(file, "Workbook");
   const content = Buffer.from(entry.content);
-  // Dimensions 레코드(0x0200, 14바이트)의 끝 행과 끝 열
+  // 첫 시트 Dimensions 레코드(0x0200, 14바이트)의 끝 행, 첫 열, 끝 열
   const at = content.indexOf(Buffer.from([0x00, 0x02, 0x0e, 0x00]));
   content.writeUInt32LE(rows, at + 8);
+  content.writeUInt16LE(firstCol, at + 12);
   content.writeUInt16LE(cols, at + 14);
   entry.content = content;
   return new Uint8Array(XLSX.CFB.write(file, { type: "buffer" }));
@@ -105,6 +106,22 @@ describe("readSheet", () => {
     expectError(() => readSheet(declare(MAX_CELLS / 1000 + 1), "a.xlsx"), TOO_LARGE);
     expectError(() => readSheet(declareRange(book(), "A1:XFD1048576"), "a.xlsx"), TOO_LARGE);
     expectError(() => readSheet(declareBiffSize(book("biff8"), 65536, 256), "a.xls"), TOO_LARGE);
+  });
+  it("셀 없이 범위가 뒤집힌 시트는 훑지 않고 건너뛴다", () => {
+    const data = declareBiffSize(workbook([XLSX.utils.aoa_to_sheet([]), XLSX.utils.aoa_to_sheet([["값"]])], "biff8"), 0xffffffff, 1, 1);
+    const started = performance.now();
+    expect(readSheet(data, "a.xls")).toEqual([["값"]]);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+  it("내용 없는 HTML 표를 건너뛰고 다음 표를 읽는다", () => {
+    expect(readSheet(utf8("<table></table><table><tr><td>값</td></tr></table>"), "a.xls")).toEqual([["값"]]);
+  });
+  it("칸 수 상한은 한 번에 읽은 시트를 합쳐서 센다", () => {
+    // 내용 없이 400행 × 1000열을 차지하는 표
+    const blank = "<table><tr><td>&nbsp;</td><td colspan=998></td><td>&nbsp;</td>" + "<tr>".repeat(398) + "<tr><td>&nbsp;</td></tr></table>";
+    const html = (count: number) => utf8(blank.repeat(count) + "<table><tr><td>값</td></tr></table>");
+    expect(readSheet(html(2), "a.xls")).toEqual([["값"]]);
+    expectError(() => readSheet(html(3), "a.xls"), TOO_LARGE);
   });
   it("xlsx는 이름을 먼저 읽고 한 시트씩 만든다", () => {
     const data = workbook([XLSX.utils.aoa_to_sheet([]), XLSX.utils.aoa_to_sheet([["값"]])]);
