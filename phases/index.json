@@ -7,7 +7,8 @@
     },
     {
       "dir": "1-dashboard",
-      "status": "pending"
+      "status": "blocked",
+      "blocked_at": "2026-10-08T17:20:34+0900"
     }
   ]
 }
