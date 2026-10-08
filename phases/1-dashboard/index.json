@@ -69,7 +69,9 @@
     {
       "step": 8,
       "name": "upload-api",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T16:46:28+0900",
+      "summary": "POST /api/upload: FormData file 필드로 파싱→분류→저장; 200 UploadResult(total, inserted, duplicates, unclassified), 401 미인증·429 최근 24시간 상한·400 파일/파싱/거래 수/미래 날짜 오류·500 일반 오류는 { error }; 4MB·5,000건·24시간 20회 제한, 본문 읽기 전 기록 후 재확인 및 UTC 내일보다 늦은 거래가 있으면 전체 거절; src/types/upload.ts UploadResult/UploadErrorBody, validate.ts MAX_UPLOAD_BYTES/MAX_TRANSACTIONS_PER_UPLOAD/MAX_UPLOADS_PER_DAY/validateUploadFile/maxAllowedDate export; 신규 39개·전체 408개 테스트와 lint/build·LA/서울 시간대 및 전체 AC 통과"
     },
     {
       "step": 9,
