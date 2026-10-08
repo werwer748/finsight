@@ -26,11 +26,11 @@ function zip(compression = true) {
   return Buffer.from(workbook([XLSX.utils.aoa_to_sheet([["값", 4500]])], "xlsx", compression));
 }
 // SheetJS로 쓰면 선언 범위만큼 순회하므로, 만든 파일에서 범위 기록만 바꾼다.
-function declareRange(data: Uint8Array, ref: string): Uint8Array {
+function declareRange(data: Uint8Array, ref: string, attribute = "ref"): Uint8Array {
   const file = XLSX.CFB.read(Buffer.from(data), { type: "buffer" });
   const index: number = file.FullPaths.findIndex((name: string) => name.endsWith("worksheets/sheet1.xml"));
   const xml = Buffer.from(file.FileIndex[index].content).toString("utf8");
-  XLSX.CFB.utils.cfb_add(file, file.FullPaths[index], Buffer.from(xml.replace(/<dimension ref="[^"]*"\/>/, `<dimension ref="${ref}"/>`)));
+  XLSX.CFB.utils.cfb_add(file, file.FullPaths[index], Buffer.from(xml.replace(/<dimension ref="[^"]*"\/>/, `<dimension ${attribute}="${ref}"/>`)));
   return new Uint8Array(XLSX.CFB.write(file, { fileType: "zip", type: "buffer" }));
 }
 function declareBiffSize(data: Uint8Array, rows: number, cols: number, firstCol = 0): Uint8Array {
@@ -107,11 +107,15 @@ describe("readSheet", () => {
     expectError(() => readSheet(declareRange(book(), "A1:XFD1048576"), "a.xlsx"), TOO_LARGE);
     expectError(() => readSheet(declareBiffSize(book("biff8"), 65536, 256), "a.xls"), TOO_LARGE);
   });
+  it("좌표가 안전한 정수 범위를 넘는 시트는 순회하지 않고 거부한다", () => {
+    // SheetJS는 dimension 태그의 앞 50자만 읽으므로 속성 이름을 줄여 큰 좌표를 넣는다. 한 칸짜리 범위라 칸 수 상한에는 걸리지 않는다.
+    const data = declareRange(workbook([XLSX.utils.aoa_to_sheet([["값", 4500]])]), "A9999999999999999:A9999999999999999", "r");
+    expectError(() => readSheet(data, "a.xlsx"), TOO_LARGE);
+  });
   it("셀 없이 범위가 뒤집힌 시트는 훑지 않고 건너뛴다", () => {
+    // 훑으면 43억 행을 돌아 테스트 제한 시간을 넘긴다.
     const data = declareBiffSize(workbook([XLSX.utils.aoa_to_sheet([]), XLSX.utils.aoa_to_sheet([["값"]])], "biff8"), 0xffffffff, 1, 1);
-    const started = performance.now();
     expect(readSheet(data, "a.xls")).toEqual([["값"]]);
-    expect(performance.now() - started).toBeLessThan(1000);
   });
   it("내용 없는 HTML 표를 건너뛰고 다음 표를 읽는다", () => {
     expect(readSheet(utf8("<table></table><table><tr><td>값</td></tr></table>"), "a.xls")).toEqual([["값"]]);

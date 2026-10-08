@@ -146,6 +146,8 @@ function firstGrid(book: XLSX.WorkBook): SheetGrid | undefined {
     const sheet = book.Sheets[name];
     if (!sheet?.["!ref"]) continue;
     const region = XLSX.utils.decode_range(sheet["!ref"]);
+    // 좌표가 안전한 정수 범위를 넘으면 row++가 값을 올리지 못해 순회가 끝나지 않는다.
+    if (![region.s.r, region.s.c, region.e.r, region.e.c].every(Number.isSafeInteger)) throw new ParseError(TOO_LARGE_MESSAGE);
     const rows = region.e.r - region.s.r + 1;
     const cols = region.e.c - region.s.c + 1;
     // 셀이 없는 시트는 범위가 뒤집혀 나오기도 한다.

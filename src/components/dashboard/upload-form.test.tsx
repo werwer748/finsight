@@ -59,6 +59,13 @@ describe("UploadForm", () => {
     await submit();
     expect(await screen.findByRole("status")).toHaveTextContent("12건을 저장했어요. 이미 있는 3건은 건너뛰었어요. 분류하지 못한 2건은 기타로 저장했어요. 같은 파일을 다시 올리면 다시 분류해요.");
   });
+  it("모두 이미 있는 거래이면 0건 저장으로 안내한다", async () => {
+    fetchMock.mockResolvedValue({ status: 200, json: async () => ({ total: 3, inserted: 0, duplicates: 3, unclassified: 0 }) });
+    render(<UploadForm />);
+    await submit();
+    expect(await screen.findByRole("status")).toHaveTextContent("0건을 저장했어요. 이미 있는 3건은 건너뛰었어요.");
+    expect(refresh).toHaveBeenCalledOnce();
+  });
   it("400 응답의 오류를 알리고 화면은 갱신하지 않는다", async () => {
     fetchMock.mockResolvedValue({ status: 400, json: async () => ({ error: "파일을 읽지 못했어요. 다른 파일을 올려 주세요." }) });
     render(<UploadForm />);
