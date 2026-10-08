@@ -95,7 +95,8 @@
       "name": "sample-demo",
       "status": "completed",
       "started_at": "2026-10-08T17:12:54+0900",
-      "summary": "src/lib/sample/transactions.ts: 고정 가상 거래 45건·배열에서 계산한 SAMPLE_RANGE; src/components/landing/sample-banner.tsx: 가상 데이터 안내·가입 링크; src/app/sample/page.tsx: 기존 DashboardView와 summarize를 쓰는 공개 정적 /sample; hero.tsx: 반응형 샘플 먼저 보기 버튼 추가; 신규 11개·전체 446개 테스트와 lint/build·전체 AC 통과"
+      "summary": "src/lib/sample/transactions.ts: 고정 가상 거래 45건·배열에서 계산한 SAMPLE_RANGE; src/components/landing/sample-banner.tsx: 가상 데이터 안내·가입 링크; src/app/sample/page.tsx: 기존 DashboardView와 summarize를 쓰는 공개 정적 /sample; hero.tsx: 반응형 샘플 먼저 보기 버튼 추가; 신규 11개·전체 446개 테스트와 lint/build·전체 AC 통과",
+      "completed_at": "2026-10-08T17:19:32+0900"
     },
     {
       "step": 12,
