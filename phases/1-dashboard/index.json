@@ -87,7 +87,8 @@
       "name": "dashboard-page",
       "status": "completed",
       "started_at": "2026-10-08T17:08:00+0900",
-      "summary": "src/app/dashboard/page.tsx: 로그인 확인 후 세션 클라이언트·사용자 ID로 getRecentTransactions 조회, 기존 기간과 summarize 합계를 DashboardView에 전달하고 UploadForm·빈 상태 렌더링; error.tsx: 메시지 노출 없는 retry 오류 화면; page.test.tsx·error.test.tsx 신규 8개 및 전체 435개 테스트·lint/build·AC 통과"
+      "summary": "src/app/dashboard/page.tsx: 로그인 확인 후 세션 클라이언트·사용자 ID로 getRecentTransactions 조회, 기존 기간과 summarize 합계를 DashboardView에 전달하고 UploadForm·빈 상태 렌더링; error.tsx: 메시지 노출 없는 retry 오류 화면; page.test.tsx·error.test.tsx 신규 8개 및 전체 435개 테스트·lint/build·AC 통과",
+      "completed_at": "2026-10-08T17:12:54+0900"
     },
     {
       "step": 11,
