@@ -53,7 +53,10 @@
     {
       "step": 6,
       "name": "db-schema",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T16:32:22+0900",
+      "summary": "supabase/migrations/20261007000000_dashboard.sql: transactions(id, user_id, date, merchant, amount, kind, category, fingerprint, created_at), merchant_categories(user_id, merchant, category, created_at), uploads(id, user_id, created_at); unique (user_id, fingerprint), primary key (user_id, merchant), 사용자별 날짜·업로드 시각 인덱스; 세 테이블 RLS와 authenticated select·insert 정책, update 정책·권한은 transactions에만 부여(총 7개 정책); 전체 AC 통과; 사용자가 Supabase SQL 에디터에서 직접 적용해야 하고, step 12가 그 확인을 기다림",
+      "completed_at": "2026-10-08T16:33:27+0900"
     },
     {
       "step": 7,
