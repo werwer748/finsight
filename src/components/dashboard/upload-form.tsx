@@ -11,6 +11,17 @@ import type { UploadResult } from "@/types/upload";
 
 const PROCESSING_ERROR = "업로드를 처리하지 못했어요. 잠시 후 다시 시도해 주세요.";
 
+function isUploadResult(data: unknown): data is UploadResult {
+  if (typeof data !== "object" || data === null) return false;
+  const record = data as Record<string, unknown>;
+  return ["total", "inserted", "duplicates", "unclassified"].every((key) => Number.isInteger(record[key]));
+}
+
+function errorMessage(data: unknown): string {
+  if (typeof data === "object" && data !== null && "error" in data && typeof data.error === "string" && data.error) return data.error;
+  return PROCESSING_ERROR;
+}
+
 export function UploadForm(): JSX.Element {
   const router = useRouter();
   const [isPending, setIsPending] = useState(false);
@@ -44,7 +55,7 @@ export function UploadForm(): JSX.Element {
         setError("업로드에 실패했어요. 네트워크 연결을 확인해 주세요.");
         return;
       }
-      let data;
+      let data: unknown;
       try {
         data = await response.json();
       } catch {
@@ -52,10 +63,14 @@ export function UploadForm(): JSX.Element {
         return;
       }
       if (response.status !== 200) {
-        setError(typeof data?.error === "string" && data.error ? data.error : PROCESSING_ERROR);
+        setError(errorMessage(data));
         return;
       }
-      const { inserted, duplicates, unclassified } = data as UploadResult;
+      if (!isUploadResult(data)) {
+        setError(PROCESSING_ERROR);
+        return;
+      }
+      const { inserted, duplicates, unclassified } = data;
       let message = `${inserted}건을 저장했어요.`;
       if (duplicates > 0) message += ` 이미 있는 ${duplicates}건은 건너뛰었어요.`;
       if (unclassified > 0) message += ` 분류하지 못한 ${unclassified}건은 기타로 저장했어요. 같은 파일을 다시 올리면 다시 분류해요.`;

@@ -174,6 +174,11 @@ describe("POST /api/upload", () => {
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("비밀");
     if (dependency === saveTransactions) expect(recordUpload).toHaveBeenCalledTimes(1);
   });
+  it("500 로그에는 예외의 이름만 남긴다", async () => {
+    vi.mocked(saveTransactions).mockRejectedValueOnce(new TypeError("비밀 test.csv 홍길동 10000"));
+    expect((await POST(request())).status).toBe(500);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("업로드를 처리하지 못했어요. 오류 종류: TypeError");
+  });
   it("본문과 헤더의 사용자 ID는 무시한다", async () => {
     const req = request(csv, "test.csv", "attacker");
     req.headers.set("userId", "attacker");

@@ -39,7 +39,8 @@ function findColumns(row: string[]) {
 
 function readAmount(value: string): number | null {
   const cleaned = value.replace(/[,\s원₩]/g, "");
-  if (cleaned === "") return 0;
+  // 입출금 분리형은 해당 없는 열을 기호만으로 채우기도 한다.
+  if (cleaned === "" || cleaned === "-" || cleaned === "–") return 0;
   if (!/^[+-]?\d+(\.0+)?$/.test(cleaned)) return null;
   const amount = Number(cleaned);
   return Number.isSafeInteger(amount) ? amount : null;

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as XLSX from "xlsx";
 import { EMPTY_FILE_MESSAGE, UNSUPPORTED_FORMAT_MESSAGE } from "./file-rules";
-import { MAX_INFLATED_BYTES, MAX_SHEETS, ParseError, assertZipWithinLimit, readSheet } from "./read-sheet";
+import { MAX_CELLS, MAX_INFLATED_BYTES, MAX_SHEETS, ParseError, assertZipWithinLimit, readSheet } from "./read-sheet";
 
 vi.mock("xlsx", { spy: true });
 
@@ -24,6 +24,25 @@ function workbook(sheets: XLSX.WorkSheet[], bookType: "xlsx" | "biff8" = "xlsx",
 }
 function zip(compression = true) {
   return Buffer.from(workbook([XLSX.utils.aoa_to_sheet([["값", 4500]])], "xlsx", compression));
+}
+// SheetJS로 쓰면 선언 범위만큼 순회하므로, 만든 파일에서 범위 기록만 바꾼다.
+function declareRange(data: Uint8Array, ref: string): Uint8Array {
+  const file = XLSX.CFB.read(Buffer.from(data), { type: "buffer" });
+  const index: number = file.FullPaths.findIndex((name: string) => name.endsWith("worksheets/sheet1.xml"));
+  const xml = Buffer.from(file.FileIndex[index].content).toString("utf8");
+  XLSX.CFB.utils.cfb_add(file, file.FullPaths[index], Buffer.from(xml.replace(/<dimension ref="[^"]*"\/>/, `<dimension ref="${ref}"/>`)));
+  return new Uint8Array(XLSX.CFB.write(file, { fileType: "zip", type: "buffer" }));
+}
+function declareBiffSize(data: Uint8Array, rows: number, cols: number): Uint8Array {
+  const file = XLSX.CFB.read(Buffer.from(data), { type: "buffer" });
+  const entry = XLSX.CFB.find(file, "Workbook");
+  const content = Buffer.from(entry.content);
+  // Dimensions 레코드(0x0200, 14바이트)의 끝 행과 끝 열
+  const at = content.indexOf(Buffer.from([0x00, 0x02, 0x0e, 0x00]));
+  content.writeUInt32LE(rows, at + 8);
+  content.writeUInt16LE(cols, at + 14);
+  entry.content = content;
+  return new Uint8Array(XLSX.CFB.write(file, { type: "buffer" }));
 }
 function positions(data: Buffer) {
   const end = data.length - 22;
@@ -75,6 +94,17 @@ describe("readSheet", () => {
     const sheets = Array.from({ length: MAX_SHEETS }, () => XLSX.utils.aoa_to_sheet([["값"]]));
     expect(readSheet(workbook(sheets, type), "a.xlsx")).toEqual([["값"]]);
     expectError(() => readSheet(workbook([...sheets, sheets[0]], type), "a.xlsx"), DAMAGED);
+  });
+  it("선언된 범위가 칸 수 상한을 넘는 시트는 순회하지 않고 거부한다", () => {
+    expect(MAX_CELLS).toBe(1_000_000);
+    const book = (type: "xlsx" | "biff8" = "xlsx") => workbook([XLSX.utils.aoa_to_sheet([["값", 4500]])], type);
+    const declare = (rows: number) => declareRange(book(), XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows - 1, c: 999 } }));
+    const atLimit = readSheet(declare(MAX_CELLS / 1000), "a.xlsx");
+    expect(atLimit).toHaveLength(1);
+    expect(atLimit[0].filter(Boolean)).toEqual(["값", "4500"]);
+    expectError(() => readSheet(declare(MAX_CELLS / 1000 + 1), "a.xlsx"), TOO_LARGE);
+    expectError(() => readSheet(declareRange(book(), "A1:XFD1048576"), "a.xlsx"), TOO_LARGE);
+    expectError(() => readSheet(declareBiffSize(book("biff8"), 65536, 256), "a.xls"), TOO_LARGE);
   });
   it("xlsx는 이름을 먼저 읽고 한 시트씩 만든다", () => {
     const data = workbook([XLSX.utils.aoa_to_sheet([]), XLSX.utils.aoa_to_sheet([["값"]])]);

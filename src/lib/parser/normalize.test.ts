@@ -163,6 +163,17 @@ describe("normalizeRows", () => {
     expect(normalizeRows(grid)).toHaveLength(1);
   });
 
+  it.each(["-", "–"])("이중 금액형에서 기호 %s만 있는 칸은 빈 칸으로 읽는다", (blank) => {
+    const grid: string[][] = [bankHeader,
+      ["2026-09-01", "타행이체", "홍길동", "50000", blank, "100000"],
+      ["2026-09-02", "입금", "급여", blank, "30000", "130000"],
+      ["2026-09-03", "입금", "급여", blank, blank, "130000"]];
+    expect(normalizeRows(grid)).toMatchObject([
+      { date: "2026-09-01", amount: 50000, kind: "expense" },
+      { date: "2026-09-02", amount: 30000, kind: "income" },
+    ]);
+  });
+
   it.each([[], [["날짜", "내용"]], [["날짜내용금액"], ["2026-09-01"]]].map((grid) => ({ grid })))("유효 헤더가 없으면 정해진 ParseError를 던진다", ({ grid }) => {
     expect(() => normalizeRows(grid)).toThrow(ParseError);
     expect(() => normalizeRows(grid)).toThrow(HEADER_ERROR);

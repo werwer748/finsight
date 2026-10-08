@@ -17,6 +17,7 @@ export class ParseError extends Error {
 
 export const MAX_INFLATED_BYTES = 20 * 1024 * 1024;
 export const MAX_SHEETS = 20;
+export const MAX_CELLS = 1_000_000;
 const MIN_ENTRY_BYTES = 256 * 1024;
 const DAMAGED_MESSAGE = "파일을 읽지 못했어요. 파일이 손상되지 않았는지 확인해 주세요.";
 const TOO_LARGE_MESSAGE = "파일 내용이 너무 커요. 기간을 나눠서 올려 주세요.";
@@ -144,6 +145,8 @@ function firstGrid(book: XLSX.WorkBook): SheetGrid | undefined {
     const sheet = book.Sheets[name];
     if (!sheet?.["!ref"]) continue;
     const region = XLSX.utils.decode_range(sheet["!ref"]);
+    // SheetJS는 파일이 선언한 범위를 실제 셀과 맞춰 보지 않으므로 순회하기 전에 칸 수를 제한한다.
+    if ((region.e.r - region.s.r + 1) * (region.e.c - region.s.c + 1) > MAX_CELLS) throw new ParseError(TOO_LARGE_MESSAGE);
     const grid: SheetGrid = [];
     for (let row = region.s.r; row <= region.e.r; row++) {
       const values: string[] = [];

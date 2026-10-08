@@ -72,8 +72,8 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ total: parsed.length, inserted, duplicates, unclassified } satisfies UploadResult);
   } catch (error) {
     if (error instanceof ParseError) return errorResponse(error.message, 400);
-    // 예외의 message와 stack에도 파일·거래 정보가 섞일 수 있어 고정 오류 종류만 기록한다.
-    console.error("업로드를 처리하지 못했어요. 오류 종류: 처리 오류");
+    // 예외의 message와 stack에는 파일·거래 정보가 섞일 수 있어 예외의 이름만 기록한다.
+    console.error(`업로드를 처리하지 못했어요. 오류 종류: ${error instanceof Error ? error.name : "알 수 없음"}`);
     return errorResponse("업로드를 처리하지 못했어요. 잠시 후 다시 시도해 주세요.", 500);
   }
 }
