@@ -113,10 +113,10 @@ describe("readSheet", () => {
     expectError(() => readSheet(data, "a.xlsx"), TOO_LARGE);
   });
   it("셀 없이 범위가 뒤집힌 시트는 훑지 않고 건너뛴다", () => {
-    // 훑으면 43억 행을 돌아 테스트 제한 시간을 넘긴다.
+    // 훑으면 43억 행을 돌아 제한 시간을 넘긴다.
     const data = declareBiffSize(workbook([XLSX.utils.aoa_to_sheet([]), XLSX.utils.aoa_to_sheet([["값"]])], "biff8"), 0xffffffff, 1, 1);
     expect(readSheet(data, "a.xls")).toEqual([["값"]]);
-  });
+  }, 5000);
   it("내용 없는 HTML 표를 건너뛰고 다음 표를 읽는다", () => {
     expect(readSheet(utf8("<table></table><table><tr><td>값</td></tr></table>"), "a.xls")).toEqual([["값"]]);
   });
