@@ -16,7 +16,7 @@ describe("EmptyState", () => {
 
     expect(
       screen.getByText(
-        "거래 내역 파일을 올리면 여기에서 소비 분석을 볼 수 있어요. 업로드 기능은 곧 추가됩니다.",
+        "거래 내역 파일을 올리면 여기에서 소비 분석을 볼 수 있어요.",
       ),
     ).toBeInTheDocument();
   });

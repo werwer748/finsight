@@ -77,7 +77,9 @@
     {
       "step": 9,
       "name": "dashboard-ui",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T16:53:12+0900",
+      "summary": "src/components/dashboard/: summary-cards.tsx(totalExpense/totalIncome/totalTransfer), category-chart.tsx(categories), transaction-table.tsx(transactions), dashboard-view.tsx(range/summary/transactions)는 props 표시 전용 서버 컴포넌트; upload-form.tsx만 클라이언트 컴포넌트로 파일 검증·POST /api/upload·성공/오류/진행 안내·refresh 구현; empty-state.tsx 설명 수정, 신규 테스트 19개와 전체 427개·lint/build·AC 통과"
     },
     {
       "step": 10,
