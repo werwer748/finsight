@@ -105,7 +105,8 @@
       "summary": "사용자가 supabase/migrations/20261007000000_dashboard.sql의 실제 Supabase DB 적용을 migration_applied: true로 확인했으며, AC 통과; 이 step에서 코드 변경 없음",
       "migration_applied": true,
       "started_at": "2026-10-08T17:19:32+0900",
-      "blocked_at": "2026-10-08T17:20:34+0900"
+      "blocked_at": "2026-10-08T17:20:34+0900",
+      "completed_at": "2026-10-08T17:29:37+0900"
     }
   ],
   "created_at": "2026-10-08T15:35:27+0900"
