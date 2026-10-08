@@ -32,7 +32,7 @@ describe("resolveAuthRedirect", () => {
   );
 
   // /dashboardx 는 /dashboard 로 시작하지만 하위 경로가 아니다.
-  it.each(["/", "/dashboardx", "/auth/confirm"])(
+  it.each(["/", "/dashboardx", "/auth/confirm", "/sample"])(
     "%s 는 로그인 여부와 상관없이 그대로 둔다",
     (pathname) => {
       expect(resolveAuthRedirect(pathname, false)).toBeNull();
