@@ -13,7 +13,9 @@
     {
       "step": 1,
       "name": "sheet-reader",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T15:39:35+0900",
+      "summary": "src/lib/parser/file-rules.ts: SUPPORTED_EXTENSIONS, UNSUPPORTED_FORMAT_MESSAGE, EMPTY_FILE_MESSAGE, hasSupportedExtension; read-sheet.ts: SheetGrid, ParseError, readSheet, assertZipWithinLimit, MAX_INFLATED_BYTES, MAX_SHEETS; 바이트 시그니처로 ZIP/OLE2와 텍스트 판별, BOM UTF-8/UTF-16LE/BE 및 엄격 UTF-8→EUC-KR 디코딩, 앞 30개 비공백 줄의 탭에 FS 적용; 문자열 보존·공백/빈 행 정리, 바이너리 숫자 실제 값과 시간대 없는 YYYY-MM-DD·YYYY-MM-DD HH:mm:ss·HH:mm:ss; ZIP 실제 해제 크기 20MB·엔트리 최소 256KB·헤더 일치 및 ZIP64 거부, 시트 최대 20개·bookSheets 후 Buffer 뷰로 한 시트씩 읽기(biff8 한 번); SheetJS xlsx 0.20.3 공식 CDN 설치, 파서 테스트 59개 및 전체 AC 통과"
     },
     {
       "step": 2,
