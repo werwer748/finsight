@@ -2,18 +2,113 @@
   "project": "FinSight",
   "phase": "1-dashboard",
   "steps": [
-    { "step": 0, "name": "transaction-types", "status": "pending" },
-    { "step": 1, "name": "sheet-reader", "status": "pending" },
-    { "step": 2, "name": "row-normalizer", "status": "pending" },
-    { "step": 3, "name": "merchant-classifier", "status": "pending" },
-    { "step": 4, "name": "dashboard-aggregate", "status": "pending" },
-    { "step": 5, "name": "claude-service", "status": "pending" },
-    { "step": 6, "name": "db-schema", "status": "pending" },
-    { "step": 7, "name": "transaction-store", "status": "pending" },
-    { "step": 8, "name": "upload-api", "status": "pending" },
-    { "step": 9, "name": "dashboard-ui", "status": "pending" },
-    { "step": 10, "name": "dashboard-page", "status": "pending" },
-    { "step": 11, "name": "sample-demo", "status": "pending" },
-    { "step": 12, "name": "apply-migration", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "transaction-types",
+      "status": "completed",
+      "summary": "src/lib/transactions/categories.ts: MERCHANT_CATEGORIES, TRANSFER_CATEGORY, INCOME_CATEGORY, FALLBACK_CATEGORY, isMerchantCategory; categories.test.ts 검증; src/types/transaction.ts: MerchantCategory, Category, TransactionKind, ParsedTransaction, CategorizedTransaction, Transaction 정의",
+      "started_at": "2026-10-08T15:35:27+0900",
+      "completed_at": "2026-10-08T15:39:35+0900"
+    },
+    {
+      "step": 1,
+      "name": "sheet-reader",
+      "status": "completed",
+      "started_at": "2026-10-08T15:39:35+0900",
+      "summary": "src/lib/parser/file-rules.ts: SUPPORTED_EXTENSIONS, UNSUPPORTED_FORMAT_MESSAGE, EMPTY_FILE_MESSAGE, hasSupportedExtension; read-sheet.ts: SheetGrid, ParseError, readSheet, assertZipWithinLimit, MAX_INFLATED_BYTES, MAX_SHEETS; 바이트 시그니처로 ZIP/OLE2와 텍스트 판별, BOM UTF-8/UTF-16LE/BE 및 엄격 UTF-8→EUC-KR 디코딩, 앞 30개 비공백 줄의 탭에 FS 적용; 문자열 보존·공백/빈 행 정리, 바이너리 숫자 실제 값과 시간대 없는 YYYY-MM-DD·YYYY-MM-DD HH:mm:ss·HH:mm:ss; ZIP 실제 해제 크기 20MB·엔트리 최소 256KB·헤더 일치 및 ZIP64 거부, 시트 최대 20개·bookSheets 후 Buffer 뷰로 한 시트씩 읽기(biff8 한 번); SheetJS xlsx 0.20.3 공식 CDN 설치, 파서 테스트 59개 및 전체 AC 통과",
+      "completed_at": "2026-10-08T15:53:12+0900"
+    },
+    {
+      "step": 2,
+      "name": "row-normalizer",
+      "status": "completed",
+      "started_at": "2026-10-08T15:53:12+0900",
+      "summary": "src/lib/parser/normalize.ts: normalizeRows(grid: SheetGrid): ParsedTransaction[]; 첫 30행의 키워드·제외어·열 역할 중복 방지로 헤더 탐색, 출금·입금 쌍은 은행 이중 금액형·선택된 날짜/내용/금액 헤더의 카드 키워드는 카드형·나머지는 은행 단일 금액형; 은행 단일 금액은 방향 우선·부호 보조와 절댓값, 카드 금액은 부호 유지, 체크카드 취소 입금은 음수 지출; 은행 거래구분에 체크가 있을 때만 isTransfer false(카드는 모두 false); 날짜 YYYY-MM-DD와 time HH:mm 또는 null을 시간대 없이 정규화, normalize.test.ts 68개 및 전체 AC 통과",
+      "completed_at": "2026-10-08T16:08:12+0900"
+    },
+    {
+      "step": 3,
+      "name": "merchant-classifier",
+      "status": "completed",
+      "summary": "src/lib/classify/merchant-key.ts: toMerchantKey 공백 정리·숫자 4개 이상 구간 마스킹; classify-transactions.ts: ClassifyDeps(loadCache/classify/saveCache) 주입, ClassifyResult(transactions/unclassified) 반환; 입금·이체·빈 키는 외부 전달 제외, 키만 중복 없이 분류·유효 응답만 캐시 저장, 원문·time 보존 및 개인정보 없는 오류 기록; 신규 테스트 25개와 전체 AC 통과",
+      "started_at": "2026-10-08T16:08:12+0900",
+      "completed_at": "2026-10-08T16:13:28+0900"
+    },
+    {
+      "step": 4,
+      "name": "dashboard-aggregate",
+      "status": "completed",
+      "started_at": "2026-10-08T16:13:28+0900",
+      "summary": "src/types/dashboard.ts: DateRange, CategoryTotal, DashboardSummary; src/lib/dashboard/period.ts: recentMonthRange(latestDate: string): DateRange — 최근 거래일 기준 전월 동일일(없으면 말일)의 다음 날부터 UTC 계산; summarize.ts: summarize(readonly Pick<CategorizedTransaction, \"amount\" | \"kind\" | \"category\">[]): DashboardSummary — 이체는 totalExpense·categories에서 제외하고 totalTransfer로 합산, 환불·양수 카테고리 정렬·비율 반영; src/lib/format.ts: formatWon(amount: number): string, formatDate(date: string): string; 신규 테스트 19개 및 전체 AC 통과",
+      "completed_at": "2026-10-08T16:18:03+0900"
+    },
+    {
+      "step": 5,
+      "name": "claude-service",
+      "status": "completed",
+      "summary": "src/services/claude.ts: classifyMerchants(merchants: string[]): Promise<Map<string, MerchantCategory>>, claude-haiku-4-5 structured outputs로 중복 제거 후 50개씩 분류, 최대 동시 5개·전체 40초 예산과 공유 AbortController 적용, 배치 실패·시간 초과 시 성공 결과만 반환하고 개인정보 없는 로그 기록; claude.test.ts 신규 mock 테스트 15개와 전체 328개·AC 통과; @anthropic-ai/sdk·zod 설치, .env.example의 기존 ANTHROPIC_API_KEY= 유지(새 환경변수 없음)",
+      "started_at": "2026-10-08T16:18:03+0900",
+      "completed_at": "2026-10-08T16:32:22+0900"
+    },
+    {
+      "step": 6,
+      "name": "db-schema",
+      "status": "completed",
+      "started_at": "2026-10-08T16:32:22+0900",
+      "summary": "supabase/migrations/20261007000000_dashboard.sql: transactions(id, user_id, date, merchant, amount, kind, category, fingerprint, created_at), merchant_categories(user_id, merchant, category, created_at), uploads(id, user_id, created_at); unique (user_id, fingerprint), primary key (user_id, merchant), 사용자별 날짜·업로드 시각 인덱스; 세 테이블 RLS와 authenticated select·insert 정책, update 정책·권한은 transactions에만 부여(총 7개 정책); 전체 AC 통과; 사용자가 Supabase SQL 에디터에서 직접 적용해야 하고, step 12가 그 확인을 기다림",
+      "completed_at": "2026-10-08T16:36:02+0900"
+    },
+    {
+      "step": 7,
+      "name": "transaction-store",
+      "status": "completed",
+      "started_at": "2026-10-08T16:36:02+0900",
+      "summary": "src/lib/transactions/fingerprint.ts: withFingerprints<T>(transactions: T[]): (T & { fingerprint: string })[] — 날짜·시각(null 포함)·가맹점·금액·종류·발생 횟수 JSON 배열의 SHA-256; store.ts: loadMerchantCache(supabase: SupabaseClient, userId: string): Promise<Map<string, MerchantCategory>>, saveMerchantCache(supabase: SupabaseClient, userId: string, entries: Map<string, MerchantCategory>): Promise<void>, saveTransactions(supabase: SupabaseClient, userId: string, transactions: CategorizedTransaction[]): Promise<{ inserted: number; duplicates: number }>, getRecentTransactions(supabase: SupabaseClient, userId: string): Promise<{ range: DateRange; transactions: Transaction[] } | null>, countUploadsSince(supabase: SupabaseClient, userId: string, since: string): Promise<number>, recordUpload(supabase: SupabaseClient, userId: string): Promise<void>; 500행씩 새 거래 넣기(ignoreDuplicates: true)와 기존 거래의 기타 아닌 새 분류 보정(ignoreDuplicates: false), 시각 저장 제외·사용자 격리·DB 기간 제한·정렬된 1000행 페이지 조회·한국어 오류; 신규 fake/지문 테스트 41개, 전체 369개와 AC 통과",
+      "completed_at": "2026-10-08T16:46:28+0900"
+    },
+    {
+      "step": 8,
+      "name": "upload-api",
+      "status": "completed",
+      "started_at": "2026-10-08T16:46:28+0900",
+      "summary": "POST /api/upload: FormData file 필드로 파싱→분류→저장; 200 UploadResult(total, inserted, duplicates, unclassified), 401 미인증·429 최근 24시간 상한·400 파일/파싱/거래 수/미래 날짜 오류·500 일반 오류는 { error }; 4MB·5,000건·24시간 20회 제한, 본문 읽기 전 기록 후 재확인 및 UTC 내일보다 늦은 거래가 있으면 전체 거절; src/types/upload.ts UploadResult/UploadErrorBody, validate.ts MAX_UPLOAD_BYTES/MAX_TRANSACTIONS_PER_UPLOAD/MAX_UPLOADS_PER_DAY/validateUploadFile/maxAllowedDate export; 신규 39개·전체 408개 테스트와 lint/build·LA/서울 시간대 및 전체 AC 통과",
+      "completed_at": "2026-10-08T16:53:12+0900"
+    },
+    {
+      "step": 9,
+      "name": "dashboard-ui",
+      "status": "completed",
+      "started_at": "2026-10-08T16:53:12+0900",
+      "summary": "src/components/dashboard/: summary-cards.tsx(totalExpense/totalIncome/totalTransfer), category-chart.tsx(categories), transaction-table.tsx(transactions), dashboard-view.tsx(range/summary/transactions)는 props 표시 전용 서버 컴포넌트; upload-form.tsx만 클라이언트 컴포넌트로 파일 검증·POST /api/upload·성공/오류/진행 안내·refresh 구현; empty-state.tsx 설명 수정, 신규 테스트 19개와 전체 427개·lint/build·AC 통과",
+      "completed_at": "2026-10-08T17:08:00+0900"
+    },
+    {
+      "step": 10,
+      "name": "dashboard-page",
+      "status": "completed",
+      "started_at": "2026-10-08T17:08:00+0900",
+      "summary": "src/app/dashboard/page.tsx: 로그인 확인 후 세션 클라이언트·사용자 ID로 getRecentTransactions 조회, 기존 기간과 summarize 합계를 DashboardView에 전달하고 UploadForm·빈 상태 렌더링; error.tsx: 메시지 노출 없는 retry 오류 화면; page.test.tsx·error.test.tsx 신규 8개 및 전체 435개 테스트·lint/build·AC 통과",
+      "completed_at": "2026-10-08T17:12:54+0900"
+    },
+    {
+      "step": 11,
+      "name": "sample-demo",
+      "status": "completed",
+      "started_at": "2026-10-08T17:12:54+0900",
+      "summary": "src/lib/sample/transactions.ts: 고정 가상 거래 45건·배열에서 계산한 SAMPLE_RANGE; src/components/landing/sample-banner.tsx: 가상 데이터 안내·가입 링크; src/app/sample/page.tsx: 기존 DashboardView와 summarize를 쓰는 공개 정적 /sample; hero.tsx: 반응형 샘플 먼저 보기 버튼 추가; 신규 11개·전체 446개 테스트와 lint/build·전체 AC 통과",
+      "completed_at": "2026-10-08T17:19:32+0900"
+    },
+    {
+      "step": 12,
+      "name": "apply-migration",
+      "status": "completed",
+      "summary": "사용자가 supabase/migrations/20261007000000_dashboard.sql의 실제 Supabase DB 적용을 migration_applied: true로 확인했으며, AC 통과; 이 step에서 코드 변경 없음",
+      "migration_applied": true,
+      "started_at": "2026-10-08T17:19:32+0900",
+      "blocked_at": "2026-10-08T17:20:34+0900",
+      "completed_at": "2026-10-08T17:29:37+0900"
+    }
+  ],
+  "created_at": "2026-10-08T15:35:27+0900",
+  "completed_at": "2026-10-08T17:29:37+0900"
 }

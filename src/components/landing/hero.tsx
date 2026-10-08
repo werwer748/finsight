@@ -13,9 +13,14 @@ export function Hero(): JSX.Element {
         은행·카드사에서 내려받은 CSV, Excel 파일을 올리면 자동으로 분류해
         대시보드로 보여드려요.
       </p>
-      <ButtonLink href="/signup" size="lg" className="mt-10">
-        무료로 시작하기
-      </ButtonLink>
+      <div className="mt-10 flex flex-col gap-3 sm:flex-row">
+        <ButtonLink href="/signup" size="lg">
+          무료로 시작하기
+        </ButtonLink>
+        <ButtonLink href="/sample" variant="secondary" size="lg">
+          샘플 먼저 보기
+        </ButtonLink>
+      </div>
       <p className="mt-4 text-sm text-muted">
         이미 계정이 있나요?{" "}
         <Link

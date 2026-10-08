@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { Hero } from "@/components/landing/hero";
 
 describe("Hero", () => {
+  it("샘플 먼저 보기 링크는 /sample로 간다", () => {
+    render(<Hero />);
+    expect(screen.getByRole("link", { name: "샘플 먼저 보기" })).toHaveAttribute("href", "/sample");
+  });
+
   it("제목과 설명을 보여준다", () => {
     render(<Hero />);
 
