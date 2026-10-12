@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "eval": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --env-file-if-exists=.env.local evals/harness/run.ts",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
