@@ -1,12 +1,43 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import posthog from "posthog-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hero } from "@/components/landing/hero";
+
+// 설정 여부는 컴포넌트 모듈을 불러올 때 한 번 읽으므로 import보다 먼저 넣는다.
+vi.hoisted(() => {
+  vi.stubEnv("NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN", "phc_test");
+  vi.stubEnv("NEXT_PUBLIC_POSTHOG_HOST", "https://posthog.example");
+});
+vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
+
+afterEach(() => {
+  vi.resetAllMocks();
+});
 
 describe("Hero", () => {
   it("샘플 먼저 보기 링크는 /sample로 간다", () => {
     render(<Hero />);
     expect(screen.getByRole("link", { name: "샘플 먼저 보기" })).toHaveAttribute("href", "/sample");
   });
+
+  it.each([
+    ["무료로 시작하기", "signup"],
+    ["로그인", "login"],
+  ])(
+    "%s 링크를 누르면 landing_cta_clicked 이벤트를 PostHog에 보낸다",
+    async (name, cta) => {
+      render(<Hero />);
+
+      await userEvent.setup().click(screen.getByRole("link", { name }));
+
+      expect(posthog.capture).toHaveBeenCalledTimes(1);
+      expect(posthog.capture).toHaveBeenCalledWith("landing_cta_clicked", {
+        cta,
+        location: "hero",
+      });
+    },
+  );
 
   it("제목과 설명을 보여준다", () => {
     render(<Hero />);

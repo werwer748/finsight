@@ -52,4 +52,18 @@ describe("ButtonLink", () => {
       screen.getByRole("link", { name: "무료로 시작하기" }),
     ).toHaveAttribute("href", "/signup");
   });
+
+  it("클릭하면 onClick을 호출한다", async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    render(
+      <ButtonLink href="/signup" onClick={onClick}>
+        무료로 시작하기
+      </ButtonLink>,
+    );
+
+    await user.click(screen.getByRole("link", { name: "무료로 시작하기" }));
+
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
 });

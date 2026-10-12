@@ -29,7 +29,7 @@ export default async function DashboardPage() {
 
   return (
     <>
-      <DashboardHeader email={user.email} />
+      <DashboardHeader email={user.email} userId={user.id} />
       <main className="flex-1 bg-surface">
         <div className="mx-auto w-full max-w-5xl px-4 py-10 sm:px-6">
           <h1 className="mb-6 break-keep text-2xl font-bold tracking-tight">대시보드</h1>
