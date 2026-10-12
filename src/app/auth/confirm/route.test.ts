@@ -1,12 +1,27 @@
 // @vitest-environment node
 import { redirect } from "next/navigation";
-import { NextRequest } from "next/server";
+import { after, NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "@/app/auth/confirm/route";
+import {
+  flushPostHogLogs,
+  logAuthEvent,
+  logAuthFailure,
+} from "@/lib/posthog/logs";
 import { createClient } from "@/lib/supabase/server";
 
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
+// after()는 요청 범위 밖에서 부르면 예외를 던지므로 NextRequest만 실제 구현을 쓴다.
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: vi.fn(),
+}));
+vi.mock("@/lib/posthog/logs", () => ({
+  logAuthEvent: vi.fn(),
+  logAuthFailure: vi.fn(),
+  flushPostHogLogs: vi.fn(),
+}));
 
 const auth = { verifyOtp: vi.fn(), exchangeCodeForSession: vi.fn() };
 const FAILED = "/login?notice=confirm-failed";
@@ -85,5 +100,65 @@ describe("GET /auth/confirm", () => {
     );
 
     expect(auth.verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it("확인에 성공하면 성공 로그를 남기고 응답 뒤에 내보낸다", async () => {
+    await expect(GET(request("?code=code-1"))).rejects.toThrow(
+      "NEXT_REDIRECT:/dashboard",
+    );
+
+    expect(logAuthEvent).toHaveBeenCalledWith(
+      "Authentication email confirmation succeeded",
+      "email_confirmation",
+    );
+    expect(logAuthFailure).not.toHaveBeenCalled();
+    expect(after).toHaveBeenCalledWith(flushPostHogLogs);
+  });
+
+  it("링크에 필요한 값이 없으면 missing_params 로 실패 로그를 남기고 응답 뒤에 내보낸다", async () => {
+    await expect(GET(request(""))).rejects.toThrow(`NEXT_REDIRECT:${FAILED}`);
+
+    expect(logAuthEvent).not.toHaveBeenCalled();
+    expect(logAuthFailure).toHaveBeenCalledTimes(1);
+    expect(logAuthFailure).toHaveBeenCalledWith(
+      "Authentication email confirmation failed",
+      "email_confirmation",
+      "missing_params",
+    );
+    expect(after).toHaveBeenCalledWith(flushPostHogLogs);
+  });
+
+  it("verifyOtp가 실패하면 Supabase 오류 코드만 실패 로그에 남긴다", async () => {
+    auth.verifyOtp.mockResolvedValue({
+      error: { code: "otp_expired", message: "Token has expired" },
+    });
+
+    await expect(GET(request("?token_hash=hash-1&type=email"))).rejects.toThrow(
+      `NEXT_REDIRECT:${FAILED}`,
+    );
+
+    expect(logAuthFailure).toHaveBeenCalledTimes(1);
+    expect(logAuthFailure).toHaveBeenCalledWith(
+      "Authentication email confirmation failed",
+      "email_confirmation",
+      "otp_expired",
+    );
+  });
+
+  it("코드 교환이 실패하면 Supabase 오류 코드만 실패 로그에 남긴다", async () => {
+    auth.exchangeCodeForSession.mockResolvedValue({
+      error: { code: "bad_code_verifier", message: "invalid" },
+    });
+
+    await expect(GET(request("?code=code-1"))).rejects.toThrow(
+      `NEXT_REDIRECT:${FAILED}`,
+    );
+
+    expect(logAuthFailure).toHaveBeenCalledTimes(1);
+    expect(logAuthFailure).toHaveBeenCalledWith(
+      "Authentication email confirmation failed",
+      "email_confirmation",
+      "bad_code_verifier",
+    );
   });
 });

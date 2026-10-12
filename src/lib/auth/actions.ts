@@ -2,7 +2,13 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { toAuthErrorMessage } from "@/lib/auth/errors";
+import {
+  flushPostHogLogs,
+  logAuthEvent,
+  logAuthFailure,
+} from "@/lib/posthog/logs";
 import {
   validateEmail,
   validatePassword,
@@ -14,6 +20,10 @@ import type { AuthFormState } from "@/types/auth";
 function field(formData: FormData, name: string): string {
   const value = formData.get(name);
   return typeof value === "string" ? value : "";
+}
+
+function flushLogsAfterResponse(): void {
+  after(flushPostHogLogs);
 }
 
 export async function signUp(
@@ -43,8 +53,13 @@ export async function signUp(
   });
 
   if (error) {
+    logAuthFailure("Authentication sign-up failed", "sign_up", error.code);
+    flushLogsAfterResponse();
     return { message: toAuthErrorMessage(error) };
   }
+
+  logAuthEvent("Authentication sign-up request accepted", "sign_up");
+  flushLogsAfterResponse();
 
   // 이메일 확인이 꺼진 프로젝트는 가입과 동시에 세션을 준다.
   if (data.session) {
@@ -77,14 +92,20 @@ export async function signIn(
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
+    logAuthFailure("Authentication sign-in failed", "sign_in", error.code);
+    flushLogsAfterResponse();
     return { message: toAuthErrorMessage(error) };
   }
 
+  logAuthEvent("Authentication sign-in succeeded", "sign_in");
+  flushLogsAfterResponse();
   redirect("/dashboard");
 }
 
 export async function signOut(): Promise<void> {
   const supabase = await createClient();
   await supabase.auth.signOut();
+  logAuthEvent("Authentication sign-out completed", "sign_out");
+  flushLogsAfterResponse();
   redirect("/");
 }

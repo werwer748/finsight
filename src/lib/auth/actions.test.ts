@@ -1,13 +1,26 @@
 // @vitest-environment node
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signIn, signOut, signUp } from "@/lib/auth/actions";
+import {
+  flushPostHogLogs,
+  logAuthEvent,
+  logAuthFailure,
+} from "@/lib/posthog/logs";
 import { createClient } from "@/lib/supabase/server";
 
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
+// after()는 요청 범위 밖에서 부르면 예외를 던진다.
+vi.mock("next/server", () => ({ after: vi.fn() }));
+vi.mock("@/lib/posthog/logs", () => ({
+  logAuthEvent: vi.fn(),
+  logAuthFailure: vi.fn(),
+  flushPostHogLogs: vi.fn(),
+}));
 
 const auth = {
   signUp: vi.fn(),
@@ -132,6 +145,48 @@ describe("signUp", () => {
 
     expect(JSON.stringify([succeeded, rejected])).not.toContain("password12");
   });
+
+  it("Supabase가 가입 요청을 받아들이면 로그를 남기고 응답 뒤에 내보낸다", async () => {
+    await signUp({}, form(signupFields));
+
+    expect(logAuthEvent).toHaveBeenCalledWith(
+      "Authentication sign-up request accepted",
+      "sign_up",
+    );
+    expect(after).toHaveBeenCalledWith(flushPostHogLogs);
+  });
+
+  it("검증에 실패하면 로그를 남기지 않는다", async () => {
+    await signUp({}, form({}));
+
+    expect(logAuthEvent).not.toHaveBeenCalled();
+    expect(logAuthFailure).not.toHaveBeenCalled();
+    expect(after).not.toHaveBeenCalled();
+  });
+
+  it("Supabase가 오류를 돌려주면 오류 코드만 담아 실패 로그를 남긴다", async () => {
+    auth.signUp.mockResolvedValue({
+      data: { user: null, session: null },
+      error: { code: "over_email_send_rate_limit", message: "rate limit" },
+    });
+
+    await signUp({}, form(signupFields));
+
+    expect(logAuthFailure).toHaveBeenCalledTimes(1);
+    expect(logAuthFailure).toHaveBeenCalledWith(
+      "Authentication sign-up failed",
+      "sign_up",
+      "over_email_send_rate_limit",
+    );
+    expect(logAuthEvent).not.toHaveBeenCalled();
+    expect(after).toHaveBeenCalledWith(flushPostHogLogs);
+  });
+
+  it("가입 요청이 받아들여지면 실패 로그를 남기지 않는다", async () => {
+    await signUp({}, form(signupFields));
+
+    expect(logAuthFailure).not.toHaveBeenCalled();
+  });
 });
 
 describe("signIn", () => {
@@ -167,6 +222,45 @@ describe("signIn", () => {
 
     expect(state).toEqual({ message: "이메일 또는 비밀번호가 올바르지 않아요." });
     expect(redirect).not.toHaveBeenCalled();
+    expect(logAuthEvent).not.toHaveBeenCalled();
+  });
+
+  it("로그인에 실패하면 오류 코드만 담아 실패 로그를 남기고 응답 뒤에 내보낸다", async () => {
+    auth.signInWithPassword.mockResolvedValue({
+      data: { user: null, session: null },
+      error: { code: "invalid_credentials", message: "Invalid login credentials" },
+    });
+
+    await signIn({}, form(loginFields));
+
+    expect(logAuthFailure).toHaveBeenCalledTimes(1);
+    expect(logAuthFailure).toHaveBeenCalledWith(
+      "Authentication sign-in failed",
+      "sign_in",
+      "invalid_credentials",
+    );
+    expect(after).toHaveBeenCalledWith(flushPostHogLogs);
+  });
+
+  it("검증에 실패하면 로그를 남기지 않는다", async () => {
+    await signIn({}, form({ email: "user", password: "" }));
+
+    expect(logAuthEvent).not.toHaveBeenCalled();
+    expect(logAuthFailure).not.toHaveBeenCalled();
+    expect(after).not.toHaveBeenCalled();
+  });
+
+  it("로그인에 성공하면 로그를 남기고 응답 뒤에 내보낸다", async () => {
+    await expect(signIn({}, form(loginFields))).rejects.toThrow(
+      "NEXT_REDIRECT:/dashboard",
+    );
+
+    expect(logAuthEvent).toHaveBeenCalledWith(
+      "Authentication sign-in succeeded",
+      "sign_in",
+    );
+    expect(logAuthFailure).not.toHaveBeenCalled();
+    expect(after).toHaveBeenCalledWith(flushPostHogLogs);
   });
 });
 
@@ -176,5 +270,15 @@ describe("signOut", () => {
 
     expect(auth.signOut).toHaveBeenCalledTimes(1);
     expect(redirect).toHaveBeenCalledWith("/");
+  });
+
+  it("로그아웃 로그를 남기고 응답 뒤에 내보낸다", async () => {
+    await expect(signOut()).rejects.toThrow("NEXT_REDIRECT:/");
+
+    expect(logAuthEvent).toHaveBeenCalledWith(
+      "Authentication sign-out completed",
+      "sign_out",
+    );
+    expect(after).toHaveBeenCalledWith(flushPostHogLogs);
   });
 });

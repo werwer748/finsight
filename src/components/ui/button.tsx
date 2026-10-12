@@ -59,15 +59,18 @@ export function ButtonLink({
   variant,
   size,
   fullWidth,
+  onClick,
 }: {
   href: string;
   children: ReactNode;
   className?: string;
+  onClick?: () => void;
 } & ButtonStyleProps): JSX.Element {
   return (
     <Link
       href={href}
       className={buttonClassName({ variant, size, fullWidth }, className)}
+      onClick={onClick}
     >
       {children}
     </Link>

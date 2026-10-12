@@ -9,10 +9,11 @@
 - Supabase (Auth + Postgres + RLS)
 - Polar (결제)
 - Claude API (`claude-haiku-4-5`, `@anthropic-ai/sdk`)
+- PostHog (사용 분석, 오류 추적, 서버 로그)
 - Vitest + Testing Library
 
 ## 아키텍처 규칙
-- CRITICAL: 클라이언트 컴포넌트에서 Supabase·Polar·Claude API를 직접 호출하지 말 것. 외부 서비스 호출과 시크릿 키 사용은 서버에서만 실행되는 코드(서버 컴포넌트, 서버 액션, `src/app/api/` 라우트 핸들러, `src/services/`)에서만 한다.
+- CRITICAL: 클라이언트 컴포넌트에서 Supabase·Polar·Claude API를 직접 호출하지 말 것. 외부 서비스 호출과 시크릿 키 사용은 서버에서만 실행되는 코드(서버 컴포넌트, 서버 액션, `src/app/api/` 라우트 핸들러, `src/services/`)에서만 한다. 예외는 PostHog 브라우저 SDK(`posthog-js`) 하나다. 공개 프로젝트 토큰만 쓰고, 거래 데이터와 개인정보(이메일 포함)는 보내지 않는다.
 - CRITICAL: 금액 합계와 통계는 반드시 코드로 계산할 것. LLM 출력에서 숫자를 가져오지 않는다.
 - CRITICAL: LLM에는 가맹점명과 집계된 통계만 보낼 것. 계좌·카드번호, 이름, 원본 거래 행은 보내지 않는다.
 - CRITICAL: 사용자 데이터를 담는 테이블은 전부 RLS를 켜고 `user_id`로 격리할 것.

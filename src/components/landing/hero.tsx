@@ -1,6 +1,22 @@
+"use client";
+
 import type { JSX } from "react";
 import Link from "next/link";
+import posthog from "posthog-js";
 import { ButtonLink } from "@/components/ui/button";
+
+const isPostHogConfigured = Boolean(
+  process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN &&
+    process.env.NEXT_PUBLIC_POSTHOG_HOST,
+);
+
+// 글자와 요소 속성을 가려서 보내므로 autocapture에는 태그와 순서만 남는다.
+// 마크업이 바뀌어도 어느 링크인지 알 수 있게 이름 붙인 이벤트를 따로 보낸다.
+function captureCtaClick(cta: "signup" | "login"): void {
+  if (isPostHogConfigured) {
+    posthog.capture("landing_cta_clicked", { cta, location: "hero" });
+  }
+}
 
 export function Hero(): JSX.Element {
   return (
@@ -14,7 +30,11 @@ export function Hero(): JSX.Element {
         대시보드로 보여드려요.
       </p>
       <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-        <ButtonLink href="/signup" size="lg">
+        <ButtonLink
+          href="/signup"
+          size="lg"
+          onClick={() => captureCtaClick("signup")}
+        >
           무료로 시작하기
         </ButtonLink>
         <ButtonLink href="/sample" variant="secondary" size="lg">
@@ -26,6 +46,7 @@ export function Hero(): JSX.Element {
         <Link
           href="/login"
           className="font-medium text-primary hover:text-primary-hover"
+          onClick={() => captureCtaClick("login")}
         >
           로그인
         </Link>

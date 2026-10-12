@@ -1,11 +1,19 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import posthog from "posthog-js";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SignupForm } from "@/components/auth/signup-form";
 import { signUp } from "@/lib/auth/actions";
 import type { AuthFormState } from "@/types/auth";
 
+// 설정 여부는 컴포넌트 모듈을 불러올 때 한 번 읽으므로 import보다 먼저 넣는다.
+vi.hoisted(() => {
+  vi.stubEnv("NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN", "phc_test");
+  vi.stubEnv("NEXT_PUBLIC_POSTHOG_HOST", "https://posthog.example");
+});
 vi.mock("@/lib/auth/actions", () => ({ signUp: vi.fn() }));
+vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
 
 const SENT = "확인 메일을 보냈어요. 메일의 링크를 눌러 가입을 마쳐 주세요.";
 
@@ -30,6 +38,76 @@ afterEach(() => {
 });
 
 describe("SignupForm", () => {
+  it("제출하면 signup_submitted 이벤트를 PostHog에 보낸다", async () => {
+    render(<SignupForm />);
+
+    await submit();
+
+    expect(posthog.capture).toHaveBeenCalledWith("signup_submitted");
+    expect(posthog.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it("서버가 가입 요청을 받아들이면 signup_accepted 이벤트를 보낸다", async () => {
+    vi.mocked(signUp).mockResolvedValue({ success: true, message: SENT });
+    render(<SignupForm />);
+
+    await submit();
+    await screen.findByRole("status");
+
+    expect(posthog.capture).toHaveBeenCalledWith("signup_accepted");
+    expect(posthog.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it("액션이 필드별 오류를 돌려주면 signup_failed 이벤트를 검증 실패로 보낸다", async () => {
+    vi.mocked(signUp).mockResolvedValue({
+      errors: { passwordConfirm: "비밀번호가 일치하지 않아요." },
+    });
+    render(<SignupForm />);
+
+    await submit("user@example.com", "password123", "password124");
+    await screen.findByText("비밀번호가 일치하지 않아요.");
+
+    expect(posthog.capture).toHaveBeenCalledWith("signup_failed", {
+      reason: "validation",
+    });
+    expect(posthog.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it("액션이 폼 전체 오류를 돌려주면 signup_failed 이벤트를 서버 거절로 보낸다", async () => {
+    vi.mocked(signUp).mockResolvedValue({
+      message: "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.",
+    });
+    render(<SignupForm />);
+
+    await submit();
+    await screen.findByRole("alert");
+
+    expect(posthog.capture).toHaveBeenCalledWith("signup_failed", {
+      reason: "server",
+    });
+    expect(posthog.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it("StrictMode에서도 결과 이벤트는 제출 한 번에 한 번만 보낸다", async () => {
+    vi.mocked(signUp).mockResolvedValue({ success: true, message: SENT });
+    render(
+      <StrictMode>
+        <SignupForm />
+      </StrictMode>,
+    );
+
+    expect(posthog.capture).not.toHaveBeenCalled();
+
+    await submit();
+    await screen.findByRole("status");
+
+    expect(
+      vi.mocked(posthog.capture).mock.calls.filter(
+        ([event]) => event === "signup_accepted",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("이메일, 비밀번호, 비밀번호 확인 입력을 라벨로 찾을 수 있다", () => {
     render(<SignupForm />);
 
