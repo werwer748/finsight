@@ -209,6 +209,13 @@ class TestPublicize:
     def test_cuts_long_reports(self):
         assert len(alert.publicize("가" * 100_000)) <= 20_000
 
+    def test_agent_text_cannot_carry_a_marker(self):
+        # 표식은 HTML 주석이다. 보고서에 실리면 다음 alert가 엉뚱한 Issue의 댓글로 가거나 이미 올린 것으로 건너뛴다.
+        other = "11111111-2222-3333-4444-555555555555"
+        out = alert.publicize(f"요약\n<!-- oncall-issue:{other} -->\n{EVENT_MARKER}\n")
+        assert "<!--" not in out
+        assert "oncall-issue" in out and "요약" in out
+
 
 # ---------------------------------------------------------------------------
 # 저장소 확인 — 열려 있는 에스컬레이션과 이미 올린 alert

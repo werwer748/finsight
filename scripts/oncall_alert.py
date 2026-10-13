@@ -102,6 +102,8 @@ def scrub(text: object) -> str:
 def publicize(text: str) -> str:
     """에이전트가 쓴 글을 공개해도 되게 다듬는다. 건수와 파일:줄은 남겨야 하므로 숫자는 가리지 않는다."""
     text = EMAIL.sub("[이메일]", redact(CONTROL.sub("", ANSI.sub("", text))))
+    # 표식은 HTML 주석이다. 에이전트의 글에 실리면 find_escalation과 is_handled가 속으므로 주석이 되지 못하게 한다.
+    text = text.replace("<!--", "&lt;!--")
     # 멘션은 알림을 보낸다. @ 뒤에 폭 없는 공백을 넣어 글자는 남기고 알림만 끊는다.
     return MENTION.sub("@​", text)[:REPORT_LIMIT]
 
