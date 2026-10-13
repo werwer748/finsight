@@ -126,13 +126,25 @@ jobs:
           else
             echo "failed=true" >> "$GITHUB_OUTPUT"
           fi
-      - run: npm install -g @anthropic-ai/claude-code
+      - name: Install agent
         if: steps.reproduce.outputs.failed == 'true'
+        run: |
+          # 아래 Fix 단계의 CLAUDE_CODE_SUBPROCESS_ENV_SCRUB은 Linux에서 bubblewrap이 있어야 켜진다. 없으면 claude가 시작하지 않는다.
+          # socat이 없으면 claude는 시작하지만 세션 안의 Bash 도구가 뜨지 않아 에이전트가 테스트를 돌리지 못한다.
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap socat
+          # ubuntu-24.04는 AppArmor가 권한 없는 사용자 네임스페이스를 막아 bubblewrap이 "Permission denied"로 죽는다.
+          # 러너는 한 번 쓰고 버리고 job 안에서 sudo가 되므로 이 제한을 풀어도 잃는 경계가 없다.
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          # 격리가 안 되는 러너에서는 에이전트를 띄우지 않고 여기서 멈춘다.
+          bwrap --unshare-pid --ro-bind / / --proc /proc --dev /dev true
+          npm install -g @anthropic-ai/claude-code
       - name: Fix
         if: steps.reproduce.outputs.failed == 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Bash 도구와 훅이 띄우는 프로세스의 환경에서 자격 증명을 지운다.
+          # Bash 도구와 훅이 띄우는 프로세스의 환경에서 자격 증명을 지우고, /proc으로도 읽지 못하게 격리한다.
+          # 에이전트가 돌리는 테스트는 의존성 코드를 실행한다. 이 값이 없으면 그 코드가 토큰을 물려받는다.
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: 1
           # scripts/tdd_guard.py가 이 값을 보고 통과시킨다. 실패한 CI가 이미 결함을 드러냈다.
           ONCALL_ACTIVE: 1
@@ -140,7 +152,11 @@ jobs:
         run: |
           timeout 20m claude -p "/oncall ci" --output-format json --permission-mode dontAsk \
             --allowedTools Edit Write "Bash(npm run lint)" "Bash(npm run build)" "Bash(npm run test)" \
-            < /dev/null > "$RUNNER_TEMP/agent.json" 2> /dev/null || echo "::warning::on-call 에이전트가 오류로 끝났습니다."
+            < /dev/null > "$RUNNER_TEMP/agent.json" 2> "$RUNNER_TEMP/agent.err" || {
+              echo "::warning::on-call 에이전트가 오류로 끝났습니다."
+              # 시작하지 못한 이유를 알 수 있게 CLI의 오류 줄만 남긴다.
+              grep -a -i -m 5 '^error' "$RUNNER_TEMP/agent.err" | cut -c1-300 || true
+            }
           jq -r '"on-call 에이전트: \(.subtype) · \(.num_turns)턴 · \(.duration_ms)ms"' "$RUNNER_TEMP/agent.json" || true
       - name: Handoff
         id: handoff
@@ -155,7 +171,12 @@ jobs:
           if ! git diff --cached --quiet HEAD && npm run lint && npm run build && npm run test; then
             git diff --cached HEAD > "$RUNNER_TEMP/oncall/fix.patch"
           fi
-          if [ -n "$(ls -A "$RUNNER_TEMP/oncall")" ]; then echo "handoff=true" >> "$GITHUB_OUTPUT"; fi
+          # 끝까지 돈 에이전트는 고치지 않았더라도 보고서를 남긴다. 아무것도 없으면 on-call 자체가 고장 난 것이다.
+          if [ -z "$(ls -A "$RUNNER_TEMP/oncall")" ]; then
+            echo "::error::on-call 에이전트가 보고서도 수정도 남기지 않았습니다."
+            exit 1
+          fi
+          echo "handoff=true" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         if: steps.handoff.outputs.handoff == 'true'
         with:

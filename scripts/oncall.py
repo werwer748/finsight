@@ -202,7 +202,8 @@ def _footer(run_url: str, pr: Optional[int]) -> str:
     if pr:
         lines.append(f"- 원래 PR: #{pr}")
     lines += [
-        "- 검증: on-call job 안에서 lint·build·test를 통과한 패치입니다. 이 PR에는 CI와 리뷰가 자동으로 돌지 않습니다.",
+        "- 검증: on-call job 안에서 lint·build·test를 통과한 패치입니다.",
+        "- 이 PR의 CI와 리뷰는 승인 대기 상태로 멈춰 있습니다. 돌리려면 이 PR에서 워크플로우 실행을 승인하세요.",
         "- **자동 머지되지 않습니다.** 테스트가 약해지지 않았는지 확인하고 직접 머지하세요.",
         "",
         "🤖 Generated with [Claude Code](https://claude.com/claude-code)",

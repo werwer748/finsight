@@ -52,7 +52,12 @@ python3 -m pytest scripts                         # 테스트
 - `oncall.py`는 워크플로우의 `oncall`과 `oncall-publish` job이 실행한다. `test` job이 실패했을 때만 깨어나고, 순서는 `prepare` → `claude -p "/oncall ci"` → 재검증과 패치 묶기(`Handoff` 단계) → `publish`다.
 - 에이전트가 도는 `oncall` job은 테스트를 실행하므로 임의 코드가 돌 수 있다. 그래서 그 job에는 읽기 권한만 주고, 에이전트 단계에는 `GH_TOKEN`도 주지 않는다. 그 job이 내놓은 보고와 패치는 `oncall-publish`가 새로 체크아웃한 곳에서 데이터로만 다룬다. 시크릿 가리기와 패치 검사를 `publish`에 두는 이유다. `oncall` job 안에 검사를 더해도 에이전트가 우회할 수 있다.
 - `publish`는 브랜치 이름, PR 제목, 커밋 메시지를 호출자가 넘긴 값으로만 만든다. 워크플로우는 그 값을 artifact가 아니라 `github.*`에서 가져온다. 에이전트가 쓴 글은 `redact`를 거쳐 PR 본문과 job summary에만 들어간다.
-- 무한루프는 세 곳에서 끊는다. `GITHUB_TOKEN`으로 연 PR은 워크플로우를 트리거하지 않는다. 워크플로우의 `if`가 `oncall/` 브랜치와 봇을 건너뛴다. `skip_reason`이 on-call 커밋 직후의 실패와 on-call PR이 열려 있는 브랜치를 건너뛴다. 토큰을 PAT이나 GitHub App으로 바꾸면 첫째가 사라지므로 나머지 둘을 지우지 않는다.
+- 무한루프는 세 곳에서 끊는다. `GITHUB_TOKEN`으로 연 PR의 워크플로우 실행은 `action_required`로 만들어져 사람이 승인하기 전에는 돌지 않는다. 워크플로우의 `if`가 `oncall/` 브랜치와 봇을 건너뛴다. `skip_reason`이 on-call 커밋 직후의 실패와 on-call PR이 열려 있는 브랜치를 건너뛴다. 토큰을 PAT이나 GitHub App으로 바꾸면 첫째가 사라지므로 나머지 둘을 지우지 않는다.
+- 에이전트 단계의 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`은 Bash 도구와 훅의 환경에서 토큰을 지우고 Bash를 격리된 PID 네임스페이스에서 돌린다. 에이전트가 돌리는 테스트는 의존성 코드를 실행하므로, 이 값이 없으면 그 코드가 `CLAUDE_CODE_OAUTH_TOKEN`을 물려받는다. Linux에서는 `bubblewrap`이 없으면 `claude`가 시작하지 않고, `socat`이 없으면 세션 안의 Bash가 뜨지 않는다. ubuntu-24.04 러너는 AppArmor가 사용자 네임스페이스를 막아 `bubblewrap`이 `Permission denied`로 죽으므로 `Install agent` 단계가 그 제한을 푼다. macOS에서는 이 셋 없이도 돌아서 로컬 시험으로는 드러나지 않는다.
+- 그 샌드박스 안에서는 lint와 test는 돌지만 `npm run build`가 권한 오류로 실패한다. 에이전트의 보고에 따르면 CSS 처리 단계가 읽을 수 없는 `.bashrc`에 걸린다. 정확한 원인은 확인하지 않았다. 그래서 build는 세션 밖의 `Reproduce`와 `Handoff` 단계에서만 확인된다. build 단계의 실패는 에이전트가 세션 안에서 재현하지 못하고 로그로만 판단한다.
+- 러너의 `gh`는 이스케이프 문자가 든 응답을 `--allow-escape-sequences` 없이는 출력하지 않는다. CI 로그에는 항상 색 코드가 있다. 옛 `gh`에는 이 옵션이 없어서 `_job_log`가 옵션 없이 다시 시도한다.
+- `Fix` 단계는 에이전트의 출력을 로그에 찍지 않는다. 실행 정보 한 줄과, 실패했을 때 CLI의 오류 줄만 남긴다. `Handoff` 단계는 보고서도 패치도 없으면 job을 실패시킨다. 끝까지 돈 에이전트는 고치지 않았더라도 보고서를 남기기 때문이다.
+- Actions의 기본 셸은 `pipefail` 없는 `bash -e`다. `oncall.py`의 출력을 `tee`로 잇는 단계에는 `shell: bash`를 줘야 스크립트의 실패가 단계의 실패가 된다.
 - `skip_reason`은 on-call 커밋을 제목 `fix(oncall):`, 트레일러 `Oncall-Run:`, 브랜치 이름 `oncall/ci-fix-`로 알아본다. `publish`가 만드는 제목·트레일러·브랜치 이름을 바꾸면 `ONCALL_COMMIT`도 고친다.
 - `has_secret`에는 접두사가 뚜렷한 패턴만 둔다. `이름=값` 규칙(`ASSIGNMENT`)을 넣으면 `token_hash=` 같은 평범한 코드에 걸려 인증 코드를 고친 패치를 열 수 없다.
 - `ONCALL_ACTIVE=1`이면 `tdd_guard.py`가 통과시킨다. 워크플로우가 on-call 세션에 세운다. 실패한 CI가 테스트 선행을 대신한다고 보기 때문이다.
