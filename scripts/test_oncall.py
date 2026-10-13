@@ -245,7 +245,7 @@ RAW_LOG = (
 
 
 def fake_run(run=None, jobs=None, prs=None, status="", head=SHA, fail=(), old_gh=False,
-             pr_url="https://github.com/o/r/pull/13"):
+             changed="src/lib/total.ts\0", pr_url="https://github.com/o/r/pull/13"):
     """gh와 git 호출에 정해 둔 응답을 돌려주는 subprocess.run 대역. fail에 든 낱말이 명령에 있으면 실패시킨다."""
     run = run_info() if run is None else run
     jobs = [job(), REVIEW_JOB] if jobs is None else jobs
@@ -273,6 +273,8 @@ def fake_run(run=None, jobs=None, prs=None, status="", head=SHA, fail=(), old_gh
             out = pr_url + "\n"
         elif cmd[:2] == ["git", "status"]:
             out = status
+        elif cmd[:2] == ["git", "diff"]:
+            out = changed
         elif cmd[:2] == ["git", "rev-parse"]:
             out = head + "\n"
         return MagicMock(returncode=0, stdout=out, stderr="")
@@ -452,30 +454,27 @@ class TestPublish:
         ".github/workflows/review-code.yml",
         ".claude/settings.json",
         "scripts/review_gate.py",
+        "scripts/도우미.py",
         "package.json",
         "package-lock.json",
         "src/app/CLAUDE.md",
     ])
     def test_warns_when_patch_touches_review_settings_or_dependencies(self, handoff, path):
         # 수정 범위는 막지 않는다. 고친 판이 시크릿과 함께 실행될 수 있다는 것만 사람에게 알린다.
-        (handoff / "fix.patch").write_text(PATCH.replace("src/lib/total.ts", path), encoding="utf-8")
-        mock = fake_run()
+        mock = fake_run(changed=f"src/lib/total.ts\0{path}\0")
         assert publish(handoff, mock) == 0
         (body,) = mock.bodies
         assert "⚠️" in body
         assert "승인하지 마세요" in body
 
-    def test_warns_when_a_protected_file_is_moved_away(self, handoff):
-        moved = (
-            "diff --git a/scripts/tdd_guard.py b/tools/guard.py\n"
-            "similarity index 100%\n"
-            "rename from scripts/tdd_guard.py\n"
-            "rename to tools/guard.py\n"
-        )
-        (handoff / "fix.patch").write_text(PATCH + moved, encoding="utf-8")
+    def test_reads_changed_paths_from_the_applied_patch(self, handoff):
+        # 패치의 글자를 해석하지 않는다. git apply가 받아들이는 형식을 흉내 내면 빠지는 경우가 생긴다.
+        # -z는 한글 경로의 따옴표 처리를 없애고 --no-renames는 옮긴 파일의 옛 경로와 새 경로를 모두 준다.
         mock = fake_run()
-        assert publish(handoff, mock) == 0
-        assert "⚠️" in mock.bodies[0]
+        publish(handoff, mock)
+        names = ["git", "diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]
+        assert names in commands(mock)
+        assert commands(mock).index(names) == commands(mock).index(["git", "apply", "--index", str(handoff / "fix.patch")]) + 1
 
     def test_protected_paths_match_the_auto_merge_job(self):
         # 같은 목록이 워크플로우의 auto-merge job에도 있다. 한쪽만 바뀌면 경고와 자동 머지 제외가 어긋난다.
@@ -797,3 +796,75 @@ class TestHandoffStep:
         git(fresh, "apply", "--index", str(folder / "fix.patch"))
         assert (fresh / "src/total.ts").read_text(encoding="utf-8") == "export const total = 2\n"
         assert (fresh / "src/total.test.ts").exists()
+
+
+# ---------------------------------------------------------------------------
+# publish — gh만 가짜로 대체하고 임시 저장소에서 실제 git으로 돌린다
+# ---------------------------------------------------------------------------
+
+SCRIPT = Path(__file__).parent / "oncall.py"
+
+
+def staged_patch(repo, rel, text):
+    """파일 하나를 더한 패치를 git으로 만들고 저장소는 원래대로 돌려놓는다."""
+    write(repo, rel, text)
+    git(repo, "add", "-A")
+    patch_text = subprocess.run(["git", "diff", "--cached", "HEAD"], cwd=repo, capture_output=True, text=True).stdout
+    git(repo, "reset", "-q")
+    (repo / rel).unlink()
+    return patch_text
+
+
+def run_real_publish(repo, tmp_path, patch_text):
+    """(종료 코드, PR 본문, 원격에 올라간 수정 브랜치의 변경 파일들)을 돌려준다."""
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, capture_output=True)
+    git(repo, "remote", "add", "origin", str(remote))
+    git(repo, "push", "-q", "origin", "HEAD:refs/heads/feat-x")
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+
+    folder = tmp_path / "handoff"
+    folder.mkdir()
+    (folder / "fix.patch").write_text(patch_text, encoding="utf-8")
+    fake_bin = tmp_path / "ghbin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text("#!/bin/sh\necho https://github.com/o/r/pull/13\n")
+    fake_gh.chmod(0o755)
+    env = dict(os.environ, PATH=f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT), "publish", str(folder), "--base", "feat-x", "--sha", sha,
+         "--run-id", "111", "--repo", "o/r", "--step", "test"],
+        cwd=repo, capture_output=True, text=True, env=env,
+    )
+    body = (folder / "body.md").read_text(encoding="utf-8") if (folder / "body.md").exists() else ""
+    pushed = subprocess.run(
+        ["git", "diff", "--name-only", "-z", sha, "oncall/ci-fix-111-1"], cwd=remote, capture_output=True, text=True,
+    ).stdout
+    return r.returncode, body, [path for path in pushed.split("\0") if path]
+
+
+class TestPublishWithRealGit:
+    def test_ordinary_fix_is_pushed_without_a_warning(self, repo, tmp_path):
+        code, body, pushed = run_real_publish(repo, tmp_path, staged_patch(repo, "src/new.ts", "export {}\n"))
+        assert code == 0
+        assert pushed == ["src/new.ts"]
+        assert "자동 머지되지 않습니다" in body
+        assert "⚠️" not in body
+
+    def test_warns_for_a_quoted_non_ascii_protected_path(self, repo, tmp_path):
+        # git은 한글 경로의 diff 헤더를 "a/scripts/\353…"처럼 따옴표로 감싼다.
+        patch_text = staged_patch(repo, "scripts/도우미.py", "print('x')\n")
+        assert 'diff --git "a/scripts/' in patch_text
+        code, body, pushed = run_real_publish(repo, tmp_path, patch_text)
+        assert code == 0
+        assert pushed == ["scripts/도우미.py"]
+        assert "⚠️" in body
+
+    def test_warns_for_a_patch_without_git_headers(self, repo, tmp_path):
+        # git apply는 diff --git 줄이 없는 패치도 적용한다.
+        patch_text = "--- /dev/null\n+++ b/scripts/helper.py\n@@ -0,0 +1 @@\n+print('x')\n"
+        code, body, pushed = run_real_publish(repo, tmp_path, patch_text)
+        assert code == 0
+        assert pushed == ["scripts/helper.py"]
+        assert "⚠️" in body

@@ -70,7 +70,6 @@ BINARY = re.compile(r"^(?:GIT binary patch|Binary files .* differ)$", re.MULTILI
 PROTECTED = re.compile(
     r"^(\.github/|\.githooks/|\.claude/|\.codex/|scripts/|package\.json$|package-lock\.json$|\.npmrc$)|(^|/)CLAUDE(\.local)?\.md$"
 )
-DIFF_HEADER = re.compile(r"^diff --git a/(.+?) b/(.+)$", re.MULTILINE)
 
 
 class OncallError(Exception):
@@ -140,11 +139,6 @@ def patch_problem(patch: str) -> Optional[str]:
     if has_secret(added):
         return "패치의 추가된 줄에 시크릿처럼 보이는 문자열이 있습니다."
     return None
-
-
-def touches_protected(patch: str) -> bool:
-    """패치가 리뷰·CI 설정이나 의존성을 고치는가. 옮긴 파일은 옛 경로도 본다."""
-    return any(PROTECTED.search(path) for pair in DIFF_HEADER.findall(patch) for path in pair)
 
 
 def _run(cmd: List[str]) -> str:
@@ -251,6 +245,10 @@ def cmd_publish(args: argparse.Namespace) -> int:
         _check_checkout(args.sha)
         _run(["git", "switch", "-c", branch])
         _run(["git", "apply", "--index", str(folder / "fix.patch")])
+        # 바뀐 경로는 패치의 글자가 아니라 적용된 결과에서 읽는다. git apply는 따옴표로 감싼 경로와 diff --git 줄이 없는
+        # 패치도 받으므로 글자를 해석하면 빠지는 경우가 생긴다. --no-renames는 옮긴 파일의 옛 경로와 새 경로를 모두 준다.
+        changed = _run(["git", "diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]).split("\0")
+        protected = any(PROTECTED.search(path) for path in changed)
         _run(["git", "-c", f"user.name={BOT_NAME}", "-c", f"user.email={BOT_EMAIL}",
               "commit", "-q", "-m", title, "-m", f"{TRAILER}: {run_url}"])
         _run(["git", "push", "origin", branch])
@@ -260,7 +258,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
         return 1
 
     body_file = folder / "body.md"
-    body_file.write_text(f"{report}\n\n{_footer(run_url, args.pr, touches_protected(patch))}", encoding="utf-8")
+    body_file.write_text(f"{report}\n\n{_footer(run_url, args.pr, protected)}", encoding="utf-8")
     try:
         url = _run(["gh", "pr", "create", "--base", args.base, "--head", branch,
                     "--title", title, "--body-file", str(body_file)]).strip()
