@@ -1,12 +1,14 @@
 ---
 name: oncall
-description: FinSight의 on-call 절차. 지금은 CI 실패 수정(`ci`) 하나다. `scripts/oncall.py prepare`가 준비한 실패 job 로그를 읽어 원인을 찾고, 최소한으로 고치고, 보고서를 쓴다. 커밋·push·PR·머지는 하지 않는다. CI의 `oncall` job이나 외부 에이전트가 `/oncall ci`로 실행한다. 대화 중에 사용자가 테스트나 빌드를 고쳐 달라고 할 때 쓰는 스킬이 아니다.
-argument-hint: "ci"
+description: FinSight의 on-call 절차. 종류는 둘이다. `ci`는 `scripts/oncall.py prepare`가 준비한 실패 job 로그를 읽어 원인을 찾고, 최소한으로 고치고, 보고서를 쓴다. `alert`는 `scripts/oncall_alert.py prepare`가 준비한 PostHog 오류 자료를 읽어 노이즈인지 신호인지 판정하고 분석을 쓴다. 어느 쪽도 커밋·push·PR·Issue·머지를 하지 않는다. CI의 on-call job이나 외부 에이전트가 `/oncall <종류>`로 실행한다. 대화 중에 사용자가 테스트나 빌드를 고쳐 달라고 하거나 오류를 조사해 달라고 할 때 쓰는 스킬이 아니다.
+argument-hint: "ci | alert"
 ---
 
 on-call 에이전트의 작업 절차다. 사람의 지시가 아니라 장애 신호가 깨운 헤드리스 세션에서 돈다. 물어볼 사람이 없으므로 확신이 없으면 고치지 않고 보고서에 적는다.
 
-종류: `$ARGUMENTS` (지금은 `ci`만 있다. 다른 값이면 지원하지 않는 종류라고 알리고 끝낸다)
+종류: `$ARGUMENTS` (`ci` 또는 `alert`. 다른 값이면 지원하지 않는 종류라고 알리고 끝낸다)
+
+`alert`이면 `.claude/skills/oncall/alert.md` 하나를 읽고 그 절차를 따른다. 이 파일의 아래 내용은 `ci`의 절차이니 따르지 않는다.
 
 ## 규칙
 
@@ -112,4 +114,4 @@ python3 scripts/oncall.py publish <폴더> --base <실패한 브랜치> --sha <�
 
 ## 종류를 더할 때
 
-`ci` 밖의 종류를 더하면 "규칙"은 그대로 두고 "1. 입력 확인"부터 "5. 보고서"까지를 종류별 절로 나눈다. `argument-hint`와 `description`도 함께 고친다.
+절차를 이 폴더의 `<종류>.md`에 쓰고 위 "종류" 아래에 한 줄을 더한다. `argument-hint`와 `description`도 함께 고친다.

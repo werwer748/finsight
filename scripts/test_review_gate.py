@@ -351,7 +351,7 @@ def run_stop_hooks(tmp_path, **extra_env):
 
     settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
     hooks = [hook["command"] for entry in settings["hooks"]["Stop"] for hook in entry["hooks"]]
-    env = {k: v for k, v in os.environ.items() if k != "REVIEW_GATE_ACTIVE"}
+    env = {k: v for k, v in os.environ.items() if k not in ("REVIEW_GATE_ACTIVE", "ONCALL_ALERT_ACTIVE")}
     env.update(PATH=f"{tmp_path}{os.pathsep}{env['PATH']}", CLAUDE_PROJECT_DIR=str(PROJECT_ROOT), **extra_env)
     return [
         subprocess.run(
@@ -368,6 +368,10 @@ class TestConfiguredStopHook:
 
     def test_exits_immediately_in_review_session(self, tmp_path):
         assert run_stop_hooks(tmp_path, REVIEW_GATE_ACTIVE="1") == [0]
+
+    def test_exits_immediately_in_alert_triage_session(self, tmp_path):
+        # oncall-alert 워크플로우의 triage job은 의존성을 설치하지 않는다. 훅이 돌면 lint부터 실패한다.
+        assert run_stop_hooks(tmp_path, ONCALL_ALERT_ACTIVE="1") == [0]
 
 
 # ---------------------------------------------------------------------------
