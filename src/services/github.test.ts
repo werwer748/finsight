@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { dispatchOncallAlert } from "./github";
+import { dispatchOncallAlert, OncallDispatchError } from "./github";
 import type { OncallAlert } from "@/types/oncall";
 
 const TOKEN_NAME = "ONCALL_GITHUB_TOKEN";
@@ -53,6 +53,16 @@ describe("dispatchOncallAlert", () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 }));
 
     await expect(dispatchOncallAlert(alert)).rejects.toThrow("on-call 워크플로우를 깨우지 못했어요. HTTP 상태: 401");
+  });
+
+  it("거절당한 오류는 웹훅이 로그에 적을 상태 코드를 따로 갖는다", async () => {
+    // 401, 403, 404는 고칠 곳이 서로 다르다(토큰 값, 권한, 저장소 접근).
+    fetchMock.mockResolvedValue(new Response(null, { status: 404 }));
+
+    const error = await dispatchOncallAlert(alert).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(OncallDispatchError);
+    expect(error).toMatchObject({ name: "OncallDispatchError", status: 404 });
   });
 
   it("오류 메시지에 토큰을 싣지 않는다", async () => {

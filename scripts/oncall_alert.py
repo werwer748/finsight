@@ -22,6 +22,8 @@ import json
 import os
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import List, Optional
@@ -45,6 +47,8 @@ REPORT_LIMIT = 20_000
 REASON_LIMIT = 200
 MAX_FRAMES = 30
 SAMPLES = 3
+# PostHog의 504 한 번에 자료 없이 판정해 노이즈가 Issue로 올라간 적이 있다. 다시 보내기 전에 기다리는 초.
+POSTHOG_RETRY_WAITS = (2, 5)
 
 # 쿼리에 넣는 값은 check_ids를 통과한 이슈 id뿐이다. events를 읽는 쿼리는 모두 기간을 건다.
 EXCEPTIONS = "FROM events WHERE event = '$exception' AND issue_id = '{issue_id}' AND timestamp >= now() - INTERVAL {days} DAY"
@@ -128,8 +132,15 @@ def is_handled(escalation: dict, event_id: str) -> bool:
     return bool(_run(["gh", "api", "--paginate", path, "--jq", query]).strip())
 
 
+def _passing(error: Exception) -> bool:
+    """다시 보내면 될 수 있는 실패인지 본다. 429를 뺀 4xx는 키나 쿼리가 틀린 것이라 다시 보내도 같다."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500 or error.code == 429
+    return isinstance(error, OSError)
+
+
 def _posthog(sql: str) -> List[dict]:
-    """HogQL 쿼리 하나를 실행해 행을 {열: 값}으로 돌려준다."""
+    """HogQL 쿼리 하나를 실행해 행을 {열: 값}으로 돌려준다. 지나가는 실패는 두 번까지 다시 보낸다."""
     names = ("POSTHOG_HOST", "POSTHOG_PROJECT_ID", "POSTHOG_PERSONAL_API_KEY")
     host, project, key = (os.environ.get(name, "") for name in names)
     missing = [name for name in names if not os.environ.get(name)]
@@ -140,12 +151,16 @@ def _posthog(sql: str) -> List[dict]:
         data=json.dumps({"query": {"kind": "HogQLQuery", "query": sql}, "name": "oncall alert"}).encode("utf-8"),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
     )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            data = json.load(response)
-        return [dict(zip(data["columns"], row)) for row in data["results"]]
-    except (OSError, ValueError, KeyError, TypeError) as e:
-        raise OncallError(f"PostHog 조회 실패: {redact(str(e))}")
+    waits = list(POSTHOG_RETRY_WAITS)
+    while True:
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                data = json.load(response)
+            return [dict(zip(data["columns"], row)) for row in data["results"]]
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            if not waits or not _passing(e):
+                raise OncallError(f"PostHog 조회 실패: {redact(str(e))}")
+            time.sleep(waits.pop(0))
 
 
 def _text(value: object) -> Optional[str]:

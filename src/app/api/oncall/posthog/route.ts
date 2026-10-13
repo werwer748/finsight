@@ -1,7 +1,7 @@
 import { isAuthorized, parseAlert } from "@/lib/oncall/alert";
 import { claimEvent, releaseEvent } from "@/lib/oncall/events";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { dispatchOncallAlert } from "@/services/github";
+import { dispatchOncallAlert, OncallDispatchError } from "@/services/github";
 import type { OncallWebhookErrorBody, OncallWebhookResult } from "@/types/oncall";
 
 function errorResponse(error: string, status: number): Response {
@@ -37,7 +37,9 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ status: "dispatched" } satisfies OncallWebhookResult);
   } catch (error) {
     // 200이 아닌 응답을 받은 PostHog가 같은 alert를 다시 보낸다.
-    console.error(`on-call alert를 넘기지 못했어요. 오류 종류: ${error instanceof Error ? error.name : "알 수 없음"}`);
+    // 오류의 글에는 요청 정보가 섞일 수 있어 이름만 남긴다. GitHub가 거절했을 때는 상태 코드도 남긴다.
+    const status = error instanceof OncallDispatchError ? ` HTTP 상태: ${error.status}` : "";
+    console.error(`on-call alert를 넘기지 못했어요. 오류 종류: ${error instanceof Error ? error.name : "알 수 없음"}${status}`);
     return errorResponse("alert를 처리하지 못했어요.", 500);
   }
 }
