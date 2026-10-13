@@ -30,6 +30,7 @@
 - `git commit`을 하면 pre-commit 훅이 staged 변경에 `/review-code`를 돌린다. 길면 9분 걸리므로 Bash 제한 시간을 10분으로 준다. 🔴 판정이면 커밋이 막히니 보고를 읽고 고친 뒤 다시 커밋한다. `--no-verify`나 `SKIP_REVIEW=1`로 우회하지 않는다. 문서만 바꾼 커밋은 리뷰를 건너뛴다.
 - PR을 올리면 GitHub Action이 lint·build·test와 함께 브랜치 전체에 `/review-code`를 돌려 PR 댓글로 남긴다. 🔴나 🟠 판정이면 체크가 실패한다.
 - 리뷰 결과에 따라 PR이 자동으로 처리된다. 🔴·🟠가 없고 🟡가 2건 이하이며 lint·build·test가 통과하면 자동 머지한다. 🔴가 2건 이상이면 PR을 닫는다. 그 밖(🔴 1건, 🟠, 🟡 3건 이상, 리뷰 미완료)은 사람이 판단한다. 자동 머지는 `main`으로 가는 PR만 다룬다. 리뷰·CI 설정과 의존성(`.github/`, `.githooks/`, `.claude/`, `.codex/`, `scripts/`, 모든 `CLAUDE.md`·`CLAUDE.local.md`, `package.json`, `package-lock.json`, `.npmrc`)을 고친 PR은 자동 머지되지 않으니 직접 머지한다.
+- PR의 lint·build·test(`test` job)가 실패하면 on-call 에이전트가 깨어나 실패 로그를 읽고 수정 PR(`oncall/ci-fix-…`, base는 실패한 브랜치)을 연다. on-call PR은 자동 머지되지 않으니 직접 리뷰하고 머지한다. 그 PR의 CI와 리뷰는 승인 대기 상태로 만들어진다. 변경 내용을 먼저 확인한 뒤 PR 페이지에서 워크플로우 실행을 승인해야 돈다. 승인하면 그 PR이 고친 판의 스크립트가 시크릿과 함께 실행된다. draft PR, 봇이 연 PR, on-call 수정을 머지한 직후의 실패, on-call PR이 이미 열려 있는 브랜치에는 깨어나지 않는다. 고치지 못하면 PR 없이 실행 요약에 사유만 남긴다. 절차는 `/oncall` 스킬에, 앞뒤 단계는 `scripts/oncall.py`에 있다.
 
 ## 명령어
 npm run dev      # 개발 서버

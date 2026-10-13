@@ -46,3 +46,6 @@ yarn-error.log*
 
 # owasp-audit reports
 .security-audit/
+
+# on-call 작업 폴더 (실패 로그, 보고서)
+.oncall/
