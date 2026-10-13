@@ -598,7 +598,8 @@ class TestWorkflow:
     def test_bubblewrap_is_installed_before_the_agent_starts(self):
         # 하위 프로세스의 환경에서 토큰을 지우는 옵션은 Linux에서 bubblewrap이 없으면 claude를 시작시키지 않는다.
         all_steps = steps(self.oncall_job)
-        install = next(i for i, step in enumerate(all_steps) if "apt-get install" in step and "bubblewrap" in step)
+        # socat이 없으면 claude는 시작하지만 세션 안의 Bash 도구가 뜨지 않아 에이전트가 테스트를 돌리지 못한다.
+        install = next(i for i, step in enumerate(all_steps) if "apt-get install -y -q bubblewrap socat" in step)
         agent = next(i for i, step in enumerate(all_steps) if "claude -p" in step)
         assert install < agent
         assert "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: 1" in all_steps[agent]
