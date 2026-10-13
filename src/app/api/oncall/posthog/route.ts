@@ -28,7 +28,10 @@ export async function POST(request: Request): Promise<Response> {
     try {
       await dispatchOncallAlert(alert);
     } catch (error) {
-      await releaseEvent(supabase, alert.eventId);
+      // 지우지 못하면 기록이 남아 재전송이 중복으로 끝난다. 이 alert를 잃었다는 흔적은 이 로그뿐이다.
+      await releaseEvent(supabase, alert.eventId).catch(() => {
+        console.error("on-call alert 기록을 지우지 못했어요. 이 alert는 다시 와도 넘어가지 않아요.");
+      });
       throw error;
     }
     return Response.json({ status: "dispatched" } satisfies OncallWebhookResult);

@@ -21,6 +21,8 @@ on:
         type: string
 
 # 같은 이슈의 alert는 한 번에 하나씩 처리한다. 동시에 돌면 둘 다 열린 Issue가 없다고 보고 Issue를 두 개 연다.
+# 대기 중인 실행은 하나만 남는다. 같은 이슈의 alert가 셋 이상 겹치면 가운데 것은 취소되고 다시 오지 않는다.
+# 마지막 실행이 같은 이슈를 그때의 자료로 판정하므로 그 손실은 받아들인다.
 concurrency:
   group: oncall-alert-${{ inputs.issue_id }}
   cancel-in-progress: false

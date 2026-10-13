@@ -130,13 +130,18 @@ describe("POST /api/oncall/posthog", () => {
     expect(releaseEvent).not.toHaveBeenCalled();
   });
 
-  it("기록을 지우지 못해도 500으로 답한다", async () => {
-    vi.mocked(dispatchOncallAlert).mockRejectedValue(new Error("dispatch"));
+  it("기록을 지우지 못해도 500으로 답하고, 넘기지 못한 오류와 지우지 못한 사실을 둘 다 로그에 남긴다", async () => {
+    // 기록이 남아 재전송이 중복으로 끝난다. 이 alert를 잃었다는 흔적은 로그뿐이다.
+    class DispatchError extends Error { name = "DispatchError"; }
+    vi.mocked(dispatchOncallAlert).mockRejectedValue(new DispatchError("dispatch"));
     vi.mocked(releaseEvent).mockRejectedValue(new Error("release"));
 
     const res = await POST(request());
 
     expect(res.status).toBe(500);
+    const logged = vi.mocked(console.error).mock.calls.flat().join(" ");
+    expect(logged).toContain("DispatchError");
+    expect(logged).toContain("기록을 지우지 못했어요");
   });
 
   it("환경변수가 빠져 클라이언트를 만들지 못해도 500으로 답한다", async () => {
