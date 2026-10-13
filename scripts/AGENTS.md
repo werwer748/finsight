@@ -10,9 +10,10 @@
 | `tdd_guard.py` | 파일 수정 전 훅. 대응 테스트가 먼저 변경되지 않은 구현 파일 수정을 막는다. |
 | `bash_guard.py` | 셸 실행 전 훅. 되돌리기 어려운 명령어 패턴을 막는다. |
 | `review_gate.py` | `/review-code` 스킬을 헤드리스로 돌리고 판정에 따라 커밋·PR을 막는다. PR에서는 자동 머지·직접 판단·닫기도 정한다. pre-commit 훅과 GitHub Action이 같이 쓴다. |
-| `oncall.py` | CI 실패를 고치는 `/oncall` 스킬의 앞뒤 단계. `prepare`는 깨어나도 되는 실패인지 확인하고 실패한 job의 로그를 가려서 준비한다. `publish`는 에이전트가 넘긴 보고와 패치로 수정 PR을 연다. GitHub Action이 쓴다. |
+| `oncall.py` | `/oncall` 스킬의 앞뒤 단계. `prepare`는 깨어나도 되는 실패인지 확인하고 실패한 job의 로그를 가려서 준비한다. `publish`는 에이전트가 넘긴 보고와 패치로 수정 PR을 연다. 이 둘은 GitHub Action이 쓴다. `ask`는 질문 하나를 읽기 전용 세션에 넘기고 돌아온 답의 근거를 검사해 초안으로 남긴다. 사람이 로컬에서 실행한다. |
 | `oncall_alert.py` | prod 오류 alert를 판정하는 `/oncall alert` 스킬의 앞뒤 단계. `prepare`는 이미 올린 alert인지 저장소에서 확인하고 PostHog 자료를 가려서 준비한다. `publish`는 에이전트가 넘긴 판정대로 기록만 남기거나 Issue를 올린다. GitHub Action이 쓴다. |
-| `test_*.py` | 위 여섯 파일의 pytest 테스트. |
+| `ask_guard.py` | MCP 호출 전 훅이자 세션 시작 훅. `/oncall ask` 세션에서 허용 목록에 든 DB 쿼리와 PostHog 읽기만 통과시키고 결정을 기록한다. 세션이 시작될 때 가드가 켜졌다는 `armed` 줄도 남긴다. 다른 세션에서는 아무것도 하지 않는다. |
+| `test_*.py` | 위 일곱 파일의 pytest 테스트. |
 
 ## 명령어
 
@@ -20,6 +21,7 @@
 python3 scripts/execute.py <phase-dir> [--push]   # phase 실행
 python3 scripts/review_gate.py --staged           # staged 변경 리뷰 (pre-commit 훅이 실행)
 python3 scripts/oncall.py prepare <run-id>        # 실패한 CI job의 로그 준비 (oncall job이 실행)
+python3 scripts/oncall.py ask --audience user "<질문>"   # 질문에 근거로 답한 초안 쓰기 (로컬에서 실행)
 python3 scripts/oncall_alert.py prepare --event-id <id> --kind <종류> --issue-id <uuid>   # alert 자료 준비 (triage job이 실행)
 python3 -m pytest scripts                         # 테스트
 ```
@@ -81,3 +83,18 @@ python3 -m pytest scripts                         # 테스트
 - alert가 한꺼번에 많이 오면 그 수만큼 실행이 생긴다. 서로 다른 이슈의 alert에는 상한이 없다. 잘못된 배포로 새 이슈가 수십 개 생기면 에이전트 세션도 수십 번 돈다. 아직 막지 않았다.
 - `oncall_alert.py`의 HTTP 호출(`_posthog`)과 실제 PostHog 응답 모양은 이 저장소에서 키를 넣고 돌려 본 적이 없다. 쿼리 문장은 MCP로 실제 프로젝트에 돌려 확인했다. `exception_timestamp`가 세 alert 모두에 오는지, PostHog가 200이 아닌 응답에 다시 보내는지도 실제 alert로 확인하지 않았다.
 - Codex는 루트에서 실행 폴더까지의 `AGENTS.md`만 자동으로 읽는다. 저장소 루트에서 실행한 세션은 이 파일을 자동으로 읽지 않는다.
+- `oncall.py ask`는 `claude -p "/oncall ask"`를 읽기 전용으로 띄운다. 순서는 질문 가리기와 `.oncall/ask/question.json` 쓰기 → 세션 → 근거 검사 → `.oncall/ask/answer.md`다. 답을 보내는 코드는 없다. 사용자에게 가는 글은 사람이 `answer.md`를 읽고 승인한 뒤 직접 보낸다.
+- ask 세션에는 `Bash`를 통째로 막는다(`ASK_DENIED`). 읽기 전용 셸 명령은 `dontAsk`에서 규칙 없이 실행되고 `Read` 거부 규칙은 `cat .env.local`을 막지 못하기 때문이다. 코드는 Read·Grep·Glob으로만 읽는다. 더 여는 도구는 MCP 둘(`ASK_ALLOWED`)뿐이다.
+- `ONCALL_ASK_ACTIVE=1`은 `oncall.py ask`가 세션에 세우는 값이다. 이 값이 있어야 `ask_guard.py`가 켜진다. `ONCALL_ACTIVE`가 가드를 푸는 값인 것과 방향이 반대다. 그래서 `claude -p "/oncall ask"`를 직접 부르는 방법은 어디에도 적지 않는다. 직접 부른 세션은 `question.json`이 없어 스킬의 첫 단계에서 멈춘다. `ask`가 실행 뒤에 그 파일을 지우는 이유다.
+- 같은 값으로 Stop 훅이 lint·build·test를 건너뛴다. ask 세션은 파일을 고칠 수 없어서, 실패를 알리면 그 출력이 구조화된 답 자리에 들어간다.
+- `ask_guard.py`는 켜져 있을 때 닫힌 쪽으로 실패한다. 훅은 exit 2일 때만 호출을 막으므로 읽지 못한 입력, 모르는 도구, 기록 실패를 모두 exit 2로 끝낸다. 예외로 끝나면(exit 1) 호출이 통과한다.
+- DB 쿼리는 `ask_guard.py`의 `SQL_TEMPLATES`와 글자 단위로 같아야 통과한다. Supabase MCP의 role은 쓰지는 못하지만 RLS를 우회해 모든 사용자의 원본 행을 읽는다. 그래서 쿼리를 통째로 고정했고, 돌려주는 열을 건수·날짜와 시각의 최솟값과 최댓값·불리언으로 제한했다. `category`처럼 사용자가 쓴 글이 담기는 열을 돌려주는 템플릿은 더하지 않는다. 템플릿의 user id는 호출자가 `ONCALL_ASK_USER_ID`로 묶은 값 하나뿐이라 질문에 적힌 다른 id로는 조회되지 않는다.
+- 템플릿을 바꾸면 `.claude/skills/oncall/ask.md`의 SQL 블록도 같이 바꾼다. `test_ask_guard.py`가 둘이 같은지 본다.
+- PostHog는 `mcp__posthog__exec` 하나로 읽기와 쓰기를 모두 한다. 가드는 `POSTHOG_TOOLS`에 든 도구의 `info`·`schema`·`call`만 통과시키고, `call`의 조회 조건도 그 표에 적힌 키만 받는다. 사람 목록이나 이메일, 스택과 변수 값을 돌려주는 도구와 `execute-sql`, 프로젝트에 저장된 지시문을 불러오는 `learn`은 넣지 않는다. 사람이나 세션으로 좁히는 키(`user`, `personId`, `sessionId`)와 이메일까지 뒤지는 `searchQuery`도 넣지 않는다. 키를 더하면 `ask.md`에도 적는다.
+- 훅은 결정마다 `.oncall/ask/guard.log`에 `allow|block`, 도구 이름, 템플릿이나 PostHog 도구 이름을 남긴다. 쿼리 글은 남기지 않는다. `ask`는 `db`·`log` 근거가 이 기록의 allow 줄과 맞는지 본다. 허용된 적 없는 조회를 근거로 댄 답과, 훅이 로드되지 않은 세션의 답이 여기서 걸린다. 기록은 호출 전에 남으므로 허용된 뒤 오류로 끝난 호출과 성공한 호출을 구분하지 못한다. `claude -p`는 검증에 실패한 설정 파일을 알리지 않고 무시한다. 그러면 가드 없이 MCP 도구가 열린다. 그래서 `ask_guard.py`를 SessionStart 훅으로도 등록해 세션이 시작될 때 `armed` 줄을 남기고, `ask`는 그 줄이 없는 세션의 답을 조회 근거가 있든 없든 버린다. `.claude/settings.json`을 고친 뒤에는 질문을 한 번 돌려 답이 버려지지 않는지 확인한다.
+- 파일 근거는 저장소가 추적하는 파일(`git ls-files`)의 줄이고 `quote`가 그 줄의 앞뒤 2줄 안에 있어야 통과한다. `.git/config`, 빌드 산출물, `.env*`(대소문자 무관)는 받지 않는다. 이 검사는 그 줄이 있다는 것까지만 보장한다. 그 줄이 주장을 뒷받침하는지는 승인하는 사람이 `answer.md`의 근거에서 본다. 그래서 근거에는 모델이 적은 인용이 아니라 `ask`가 파일에서 읽은 줄을 싣는다.
+- `--user-id`는 실행한 사람이 정한 값이다. 질문자가 그 계정의 주인이라는 증명이 아니다. 사용자에게 가는 초안에 계정 정보가 들어가면 `answer.md`가 본인 확인을 요구한다.
+- `ask`는 Supabase와 PostHog MCP가 등록된 머신에서만 돈다. 둘은 저장소가 아니라 개발 머신의 Claude Code 로컬 설정에, 이 체크아웃 경로로 등록되어 있다. worktree와 CI에는 없다. 상시로 돌리려면 집계 뷰만 읽는 DB role과 읽기 범위의 PostHog 키가 따로 필요하다.
+- `ask_guard.py`는 `.codex/hooks.json`에 등록하지 않는다. ask 세션은 `claude`로만 띄운다.
+- `ask`는 질문에서 시크릿, 10자리 이상 숫자열과 4자리 네 묶음, 이메일을 가린 뒤에 세션에 넘긴다. 숫자와 이메일의 경계는 `\b`가 아니라 글자 종류로 본다. 한글은 `\w`라서 조사가 바로 붙은 번호에는 낱말 경계가 없다. 이름은 가려내지 못한다. 질문에 적힌 이름은 그대로 LLM과 `answer.md`에 간다.
+- `answer.md`에서 질문과 초안은 인용 블록(`> `)으로, 모델이 쓴 한 줄짜리 값은 줄바꿈을 접어서 싣는다. 승인하는 사람은 `## 근거` 같은 절을 `ask`가 쓴 것으로 읽는다. 질문이나 초안의 줄바꿈으로 그 절을 흉내 낼 수 없어야 한다.

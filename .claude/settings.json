@@ -6,7 +6,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"$REVIEW_GATE_ACTIVE\" ] && exit 0; [ -n \"$ONCALL_ALERT_ACTIVE\" ] && exit 0; [ -f \"$CLAUDE_PROJECT_DIR/package.json\" ] || exit 0; [ \"$(jq -r .stop_hook_active)\" = true ] && exit 0; out=$(npm run lint 2>&1 && npm run build 2>&1 && npm run test 2>&1) || { echo \"$out\" | tail -n 40 >&2; exit 2; }"
+            "command": "[ -n \"$REVIEW_GATE_ACTIVE\" ] && exit 0; [ -n \"$ONCALL_ALERT_ACTIVE\" ] && exit 0; [ -n \"$ONCALL_ASK_ACTIVE\" ] && exit 0; [ -f \"$CLAUDE_PROJECT_DIR/package.json\" ] || exit 0; [ \"$(jq -r .stop_hook_active)\" = true ] && exit 0; out=$(npm run lint 2>&1 && npm run build 2>&1 && npm run test 2>&1) || { echo \"$out\" | tail -n 40 >&2; exit 2; }"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/ask_guard.py\""
           }
         ]
       }
@@ -27,6 +38,15 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/tdd_guard.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/ask_guard.py\""
           }
         ]
       }
