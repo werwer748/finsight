@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-On-call — CI 실패를 고치는 /oncall 스킬의 앞뒤 단계.
+On-call — /oncall 스킬의 앞뒤 단계. CI 실패 수정(prepare, publish)과 질문 응답(ask)을 맡는다.
 
 prepare는 에이전트를 띄우기 전에 실행한다. 깨어나도 되는 실패인지 확인하고, 실패한 CI job의 로그만 받아
 시크릿을 가린 뒤 .oncall/failed.log에 둔다.
@@ -8,22 +8,29 @@ publish는 에이전트가 끝난 뒤 새로 체크아웃한 곳에서 실행한
 시크릿을 가리고 수정 브랜치와 PR을 만든다. 머지는 하지 않는다.
 
 에이전트가 도는 job은 테스트를 실행하므로 임의 코드가 돌 수 있다. 그 job이 내놓은 것은 믿지 않고 publish에서 검사한다.
-stdout에는 job summary로 나갈 글만, stderr에는 진단만 쓴다.
+ask는 질문 하나를 읽기 전용 세션에 넘기고, 돌아온 답의 근거를 검사해 .oncall/ask/answer.md에 초안으로 남긴다.
+답을 누구에게도 보내지 않는다. 사용자에게 가는 글은 사람이 읽고 승인한 뒤 직접 보낸다.
+stdout에는 job summary나 답으로 나갈 글만, stderr에는 진단만 쓴다.
 
 Usage:
     python3 scripts/oncall.py prepare <run-id> [--output <파일>]
     python3 scripts/oncall.py publish <폴더> --base <브랜치> --sha <커밋> --run-id <id> --repo <owner/name>
                                       --step lint|build|test [--attempt <N>] [--pr <번호>]
+    python3 scripts/oncall.py ask --audience user|team [--user-id <uuid>] [--timeout <초>] "<질문>"
 """
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import quote
+
+import ask_guard
 
 # gh가 {owner}와 {repo}를 현재 저장소로 채운다.
 API = "repos/{owner}/{repo}"
@@ -70,6 +77,48 @@ BINARY = re.compile(r"^(?:GIT binary patch|Binary files .* differ)$", re.MULTILI
 PROTECTED = re.compile(
     r"^(\.github/|\.githooks/|\.claude/|\.codex/|scripts/|package\.json$|package-lock\.json$|\.npmrc$)|(^|/)CLAUDE(\.local)?\.md$"
 )
+
+ASK_DIR = WORKDIR / "ask"
+ASK_TIMEOUT = 600
+QUESTION_MAX = 2000
+AUDIENCES = {"user": "사용자", "team": "운영진"}
+VERDICTS = {"answer": "답변", "unknown": "확인 불가", "escalate": "escalation"}
+# 프로젝트 안의 파일 읽기는 dontAsk에서 규칙 없이도 된다. 더 여는 것은 MCP 도구 둘뿐이고 그 호출은 ask_guard.py가 거른다.
+ASK_ALLOWED = [ask_guard.SQL_TOOL, ask_guard.POSTHOG_TOOL]
+# 읽기 전용 셸 명령도 규칙 없이 실행되고 Read 거부 규칙은 Bash의 cat을 막지 못한다. 그래서 Bash를 통째로 막는다.
+ASK_DENIED = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Agent",
+              "Read(./.env*)", "Read(**/.env*)"]
+ASK_SCHEMA = {
+    "type": "object",
+    "required": ["verdict", "draft", "evidence", "unverified"],
+    "properties": {
+        "verdict": {"type": "string", "enum": list(VERDICTS)},
+        "draft": {"type": "string"},
+        "evidence": {"type": "array", "items": {
+            "type": "object",
+            "required": ["claim", "kind", "ref"],
+            "properties": {
+                "claim": {"type": "string"},
+                "kind": {"type": "string", "enum": ["code", "doc", "db", "log"]},
+                "ref": {"type": "string"},
+                "quote": {"type": "string"},
+                "detail": {"type": "string"},
+            },
+        }},
+        "unverified": {"type": "array", "items": {"type": "string"}},
+        "escalation": {"type": "object", "properties": {
+            "needed_change": {"type": "string"},
+            "reason": {"type": "string"},
+        }},
+    },
+}
+# 계좌·카드·전화번호처럼 보이는 숫자열. 날짜와 시각이 걸리지 않게 붙임표로만 이어진 10자리 이상과 4자리 네 묶음만 본다.
+LONG_DIGITS = re.compile(r"\d(?:-?\d){9,}|\b\d{4}(?: \d{4}){3}\b")
+FILE_REF = re.compile(r"(.+):(\d+)(?:-(\d+))?")
+# 한두 글자짜리 인용은 어느 줄에나 있다.
+QUOTE_MIN = 8
+# 인용한 줄에서 이만큼 떨어진 줄까지 quote를 찾는다.
+QUOTE_REACH = 2
 
 
 class OncallError(Exception):
@@ -272,6 +321,204 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def clean_question(text: str) -> str:
+    """질문에서 제어 문자를 떼고 시크릿과 긴 숫자열을 가린다. 계좌·카드번호는 LLM에 보내지 않는다."""
+    text = LONG_DIGITS.sub(MASK, redact(CONTROL.sub("", ANSI.sub("", text))))
+    return text.strip()[:QUESTION_MAX]
+
+
+def run_ask(user_id: Optional[str], timeout: int) -> dict:
+    """claude로 /oncall ask를 돌려 구조화된 답을 돌려준다. 질문은 명령줄이 아니라 question.json으로 넘긴다."""
+    # CLAUDECODE가 남아 있으면 Claude Code 세션 안에서 실행할 때 중첩 실행이 거부된다.
+    # 바깥 환경에 남아 있던 user id로 다른 계정이 조회되지 않게 그 값도 뺀다.
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "ONCALL_ASK_USER_ID")}
+    # 이 값이 ask_guard.py를 켜고 Stop 훅의 lint·build·test를 건너뛰게 한다.
+    env["ONCALL_ASK_ACTIVE"] = "1"
+    if user_id:
+        env["ONCALL_ASK_USER_ID"] = user_id
+    try:
+        r = subprocess.run(
+            ["claude", "-p", "/oncall ask", "--output-format", "json", "--json-schema", json.dumps(ASK_SCHEMA),
+             "--permission-mode", "dontAsk", "--allowedTools", *ASK_ALLOWED, "--disallowedTools", *ASK_DENIED],
+            capture_output=True, text=True, env=env, timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError as e:
+        raise OncallError(f"claude 명령을 실행할 수 없습니다: {e}")
+    except subprocess.TimeoutExpired:
+        raise OncallError(f"{timeout}초 제한 시간을 초과했습니다.")
+
+    try:
+        output = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        output = None
+    if not isinstance(output, dict) or r.returncode != 0 or output.get("is_error"):
+        raise OncallError(f"claude 실행에 실패했습니다 (code {r.returncode}).")
+    answer = output.get("structured_output")
+    if not isinstance(answer, dict):
+        # 구조화된 답이 따로 오지 않으면 마지막 메시지를 JSON으로 읽는다.
+        try:
+            answer = json.loads(output.get("result") or "")
+        except ValueError:
+            answer = None
+    if not isinstance(answer, dict):
+        raise OncallError("에이전트의 답을 읽을 수 없습니다.")
+    return answer
+
+
+def _spaces(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _file_evidence(kind: str, ref: str, quoted: object) -> Tuple[Optional[str], str]:
+    """(문제, 파일에서 읽은 줄). 인용한 줄이 저장소에 있고 quote가 그 근처에 있어야 한다."""
+    m = FILE_REF.fullmatch(ref)
+    if not m:
+        return "`경로:줄` 모양이 아닙니다", ""
+    path, start, end = Path(m.group(1)), int(m.group(2)), int(m.group(3) or m.group(2))
+    if path.is_absolute() or ".." in path.parts or any(part.startswith(".env") for part in path.parts):
+        return "저장소 밖이거나 인용할 수 없는 경로입니다", ""
+    if not path.is_file() or not path.resolve().is_relative_to(Path.cwd().resolve()):
+        return "저장소에 없는 파일입니다", ""
+    expected = "doc" if path.parts[0] == "docs" or path.suffix == ".md" else "code"
+    if kind != expected:
+        return f"이 파일의 kind는 {expected}여야 합니다", ""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if not 1 <= start <= end <= len(lines):
+        return "그 줄이 파일에 없습니다", ""
+    needle = _spaces(quoted) if isinstance(quoted, str) else ""
+    if len(needle) < QUOTE_MIN:
+        return "quote가 없거나 너무 짧습니다", ""
+    if needle not in _spaces(" ".join(lines[max(start - 1 - QUOTE_REACH, 0):end + QUOTE_REACH])):
+        return "quote가 인용한 줄 근처에 없습니다", ""
+    return None, " ".join(line.strip() for line in lines[start - 1:end])
+
+
+def _evidence(item: object, ledger: List[str]) -> Tuple[Optional[str], str]:
+    """(문제, 호출자가 확인한 내용). 파일 인용은 파일과, 조회는 ask_guard.py가 남긴 기록과 대조한다."""
+    if not isinstance(item, dict):
+        return "근거 항목이 객체가 아닙니다", ""
+    kind, ref, claim = item.get("kind"), item.get("ref"), item.get("claim")
+    if not isinstance(ref, str) or not isinstance(claim, str) or not claim.strip():
+        return "claim이나 ref가 없습니다", ""
+    if kind in ("code", "doc"):
+        return _file_evidence(kind, ref, item.get("quote"))
+    if kind == "db":
+        allowed = ref in ask_guard.SQL_TEMPLATES and f"allow\t{ask_guard.SQL_TOOL}\t{ref}" in ledger
+    elif kind == "log":
+        # 스키마만 본 것(info, schema)은 조회가 아니다.
+        allowed = ref in ask_guard.POSTHOG_TOOLS and f"allow\t{ask_guard.POSTHOG_TOOL}\tcall {ref}" in ledger
+    else:
+        return "kind가 code, doc, db, log 중 하나가 아닙니다", ""
+    # 기록은 호출 전에 남는다. 허용됐다는 것까지만 알 수 있고 성공했는지는 알 수 없다.
+    return (None, "이 세션에서 허용된 조회") if allowed else ("이 세션에서 허용된 조회 기록이 없습니다", "")
+
+
+def check_answer(answer: dict, audience: str, ledger: List[str]) -> Tuple[List[str], List[str]]:
+    """(문제 목록, 근거마다 호출자가 확인한 내용). 문제가 하나라도 있으면 답을 초안으로 내지 않는다."""
+    problems, confirmed = [], []
+    verdict = answer.get("verdict")
+    if verdict not in VERDICTS:
+        problems.append(f"verdict가 {', '.join(VERDICTS)} 중 하나가 아닙니다.")
+    if not isinstance(answer.get("draft"), str) or not answer["draft"].strip():
+        problems.append("초안이 비어 있습니다.")
+    evidence = answer.get("evidence")
+    if not isinstance(evidence, list):
+        problems.append("evidence가 목록이 아닙니다.")
+        evidence = []
+    for item in evidence:
+        problem, seen = _evidence(item, ledger)
+        if problem:
+            ref = item.get("ref") if isinstance(item, dict) else item
+            problems.append(f"근거 `{ref}`: {problem}.")
+        confirmed.append(seen)
+    if verdict == "answer":
+        if not evidence:
+            problems.append("answer인데 근거가 없습니다.")
+        # 문서는 계획이다. 사용자에게 동작을 말하려면 코드나 조회로 확인한 근거가 있어야 한다.
+        elif audience == "user" and all(isinstance(item, dict) and item.get("kind") == "doc" for item in evidence):
+            problems.append("사용자에게 가는 답의 근거가 문서뿐입니다.")
+    if verdict == "escalate":
+        escalation = answer.get("escalation")
+        if not isinstance(escalation, dict) or not str(escalation.get("needed_change") or "").strip():
+            problems.append("escalate인데 escalation.needed_change가 없습니다.")
+    return problems, confirmed
+
+
+def render_answer(question: str, answer: dict, audience: str, user_id: Optional[str],
+                  problems: List[str], confirmed: List[str]) -> str:
+    """answer.md의 글. 검증에 실패한 답은 초안으로 싣지 않고 받은 그대로만 보여 준다."""
+    head = ["", f"- 대상: {AUDIENCES[audience]}"]
+    if problems:
+        return "\n".join([
+            "# on-call ask — 근거 검증 실패", *head,
+            "- 상태: 근거 검증 실패 — 보내지 않습니다. 아래는 확인되지 않은 글입니다.",
+            "", "## 검증 실패", *[f"- {problem}" for problem in problems],
+            "", "## 질문", question,
+            "", "## 에이전트가 낸 답", "```json", json.dumps(answer, ensure_ascii=False, indent=2), "```",
+        ]) + "\n"
+
+    lines = [f"# on-call ask — {VERDICTS[answer['verdict']]}", *head]
+    if audience == "user":
+        lines.append("- 상태: 승인 대기 — 사람이 승인하기 전에는 보내지 않습니다.")
+        if user_id:
+            # --user-id는 호출한 사람이 정한 값이다. 질문자가 그 계정의 주인이라는 증명이 아니다.
+            lines.append("- 본인 확인: 지정한 계정의 정보로 쓴 초안입니다. 보내기 전에 질문자가 그 계정의 주인인지 확인하세요.")
+    else:
+        lines.append("- 상태: 내부 답변")
+    lines += ["", "## 질문", question, "", "## 초안", answer["draft"].strip(), "", "## 근거"]
+    for number, (item, seen) in enumerate(zip(answer["evidence"], confirmed), 1):
+        # 파일 근거에는 모델이 적은 인용이 아니라 호출자가 파일에서 읽은 줄을 싣는다.
+        shown = f"파일의 줄: {seen}" if item["kind"] in ("code", "doc") else " ".join([seen + ".", item.get("detail") or ""])
+        lines += [f"{number}. {item['claim'].strip()}", f"   - {item['kind']} `{item['ref']}` — {shown.strip()}"]
+    if not answer["evidence"]:
+        lines.append("없음")
+    unverified = [str(entry) for entry in answer.get("unverified") or []]
+    lines += ["", "## 확인하지 못한 것", *([f"- {entry}" for entry in unverified] or ["없음"])]
+    escalation = answer.get("escalation")
+    if answer["verdict"] == "escalate":
+        lines += ["", "## escalation", f"- 필요한 변경: {escalation['needed_change']}",
+                  f"- 사유: {escalation.get('reason') or '적지 않음'}"]
+    return "\n".join(lines) + "\n"
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    user_id = None
+    if args.user_id:
+        try:
+            user_id = str(uuid.UUID(args.user_id))
+        except ValueError:
+            raise OncallError("--user-id가 uuid가 아닙니다.")
+    question = clean_question(args.question)
+    if not question:
+        raise OncallError("질문이 비어 있습니다.")
+
+    ASK_DIR.mkdir(parents=True, exist_ok=True)
+    # 지난 실행의 답과 가드 기록이 이번 답의 근거로 읽히지 않게 지운다.
+    for name in ("answer.md", "guard.log"):
+        (ASK_DIR / name).unlink(missing_ok=True)
+    question_file = ASK_DIR / "question.json"
+    question_file.write_text(
+        json.dumps({"audience": args.audience, "user_id": user_id, "question": question}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print("ON-CALL: /oncall ask 실행 중입니다. 몇 분 걸립니다.", file=sys.stderr)
+    try:
+        answer = run_ask(user_id, args.timeout)
+    finally:
+        # 호출자 없이 스킬을 직접 부르면 가드가 꺼져 있다. 입력을 남기지 않아야 스킬이 거기서 멈춘다.
+        question_file.unlink(missing_ok=True)
+
+    problems, confirmed = check_answer(answer, args.audience, _read(ASK_DIR / "guard.log").splitlines())
+    # 인용은 파일의 글과 대조하므로 가리기는 검사 뒤에 한다.
+    text = redact(render_answer(question, answer, args.audience, user_id, problems, confirmed))
+    (ASK_DIR / "answer.md").write_text(text, encoding="utf-8")
+    print(text, end="")
+    if problems:
+        print("ON-CALL: 근거를 확인하지 못한 답입니다. 초안으로 쓰지 않습니다.", file=sys.stderr)
+    return 1 if problems else 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="On-call")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -291,6 +538,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     publish.add_argument("--step", required=True, choices=sorted(STEPS.values()))
     publish.add_argument("--pr", type=int, help="CI가 실패한 PR의 번호")
     publish.set_defaults(func=cmd_publish)
+
+    ask = commands.add_parser("ask", help="질문 하나에 근거로 답한 초안을 .oncall/ask/answer.md에 남긴다")
+    ask.add_argument("question", help="질문 글")
+    ask.add_argument("--audience", required=True, choices=sorted(AUDIENCES), help="user는 FinSight 사용자, team은 운영진")
+    ask.add_argument("--user-id", metavar="uuid", help="질문이 가리키는 계정. 줄 때만 그 계정의 집계를 조회한다")
+    ask.add_argument("--timeout", type=int, default=ASK_TIMEOUT, help="claude 실행 제한 시간(초)")
+    ask.set_defaults(func=cmd_ask)
 
     args = parser.parse_args(argv)
     try:

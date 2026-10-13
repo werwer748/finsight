@@ -26,6 +26,8 @@ OTHER_USER = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 SQL = "mcp__supabase__execute_sql"
 POSTHOG = "mcp__posthog__exec"
 LOGS_BODY = '{"query": {"serviceNames": ["finsight"], "dateRange": {"date_from": "-24h"}}}'
+ERRORS_BODY = '{"dateRange": {"date_from": "-7d"}}'
+BODIES = {"query-logs": LOGS_BODY, "query-error-tracking-issues-list": ERRORS_BODY}
 
 
 def query(name, user_id=USER):
@@ -108,8 +110,43 @@ class TestPosthogCall:
         assert guard.posthog_call(f"info {tool}") == f"info {tool}"
         assert guard.posthog_call(f"schema {tool}") == f"schema {tool}"
         assert guard.posthog_call(f"schema {tool} query.dateRange") == f"schema {tool}"
-        assert guard.posthog_call(f"call {tool} {LOGS_BODY}") == f"call {tool}"
-        assert guard.posthog_call(f"call --json {tool} {LOGS_BODY}") == f"call {tool}"
+        assert guard.posthog_call(f"call {tool} {BODIES[tool]}") == f"call {tool}"
+        assert guard.posthog_call(f"call --json {tool} {BODIES[tool]}") == f"call {tool}"
+
+    def test_allows_the_filters_the_skill_documents(self):
+        logs = ('{"query": {"serviceNames": ["finsight"], "dateRange": {"date_from": "-24h"}, '
+                '"severityLevels": ["error"], "searchTerm": "sign-in failed", "orderBy": "earliest", "limit": 50}}')
+        errors = '{"dateRange": {"date_from": "-7d"}, "status": "all", "url": "/dashboard", "orderBy": "last_seen", "limit": 10}'
+        assert guard.posthog_call(f"call query-logs {logs}") == "call query-logs"
+        assert guard.posthog_call(f"call query-error-tracking-issues-list {errors}") == "call query-error-tracking-issues-list"
+        assert guard.posthog_call("call query-error-tracking-issues-list {}") == "call query-error-tracking-issues-list"
+
+    @pytest.mark.parametrize("body", [
+        '{"query": {"serviceNames": ["finsight"], "dateRange": {"date_from": "-24h"}, "personId": "p"}}',
+        '{"query": {"serviceNames": ["finsight"], "sessionId": "s"}}',
+        '{"query": {"serviceNames": ["finsight"], "filterGroup": '
+        '[{"key": "posthogDistinctId", "type": "log_attribute", "operator": "exact", "value": "u"}]}}',
+        '{"query": {"serviceNames": ["finsight"], "customColumns": ["attributes.user_id"]}}',
+        '{"query": {"serviceNames": ["finsight"]}, "personId": "p"}',
+        '{"serviceNames": ["finsight"], "dateRange": {"date_from": "-24h"}}',
+        '{"query": "serviceNames"}',
+        "{}",
+    ])
+    def test_blocks_log_queries_narrowed_to_a_person_or_outside_the_known_keys(self, body):
+        # 본문을 보지 않으면 질문에 적힌 다른 계정으로 좁힌 조회가 프롬프트 규칙에만 걸린다.
+        assert guard.posthog_call(f"call query-logs {body}") is None
+
+    @pytest.mark.parametrize("body", [
+        '{"user": "someone@example.com"}',
+        '{"personId": "p"}',
+        '{"searchQuery": "someone@example.com"}',
+        '{"filterGroup": [{"key": "email", "type": "person", "value": "someone@example.com"}]}',
+        '{"assignee": {"id": 1, "type": "user"}}',
+        '{"dateRange": {"date_from": "-7d"}, "user": "someone"}',
+        '{"query": {"dateRange": {"date_from": "-7d"}}}',
+    ])
+    def test_blocks_error_queries_narrowed_to_a_person_or_outside_the_known_keys(self, body):
+        assert guard.posthog_call(f"call query-error-tracking-issues-list {body}") is None
 
     def test_allows_multiline_json_body(self):
         body = json.dumps(json.loads(LOGS_BODY), indent=2)
@@ -379,3 +416,9 @@ class TestSkillTemplates:
         text = ASK_SKILL.read_text(encoding="utf-8")
         for name in (*guard.SQL_TEMPLATES, *guard.POSTHOG_TOOLS):
             assert f"`{name}`" in text
+
+    def test_skill_lists_the_keys_each_posthog_tool_accepts(self):
+        text = ASK_SKILL.read_text(encoding="utf-8")
+        for keys in guard.POSTHOG_TOOLS.values():
+            for key in keys:
+                assert f"`{key}`" in text

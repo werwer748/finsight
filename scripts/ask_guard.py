@@ -5,6 +5,7 @@ Ask Guard — /oncall ask 세션의 MCP 호출을 허용 목록으로 거르는 
 ONCALL_ASK_ACTIVE가 없으면 아무것도 하지 않는다. 있으면 아래 목록에 든 호출만 통과시키고 나머지는 막는다.
 stdin으로 훅 입력(JSON)을 받아, 차단해야 하면 stderr에 사유를 쓰고 exit 2 한다. 읽지 못한 입력도 막는다.
 결정마다 .oncall/ask/guard.log에 한 줄을 남긴다. scripts/oncall.py ask가 그 기록으로 답의 근거를 대조한다.
+기록은 호출 전에 쓴다. allow 줄은 호출을 허용했다는 뜻이고, 그 호출이 성공했다는 뜻은 아니다.
 """
 
 import json
@@ -42,7 +43,19 @@ SQL_TEMPLATES = {
     ),
 }
 # 사람 목록, 이메일, 스택과 변수 값을 돌려주는 도구(…-actors, …-issue-events, execute-sql)는 넣지 않는다.
-POSTHOG_TOOLS = ("query-logs", "query-error-tracking-issues-list")
+# 도구마다 조회 조건으로 쓸 수 있는 키도 고정한다. 사람이나 세션으로 좁히는 키(user, personId, sessionId, assignee),
+# 이메일까지 뒤지는 searchQuery, 속성 이름을 받는 filterGroup, 식을 받는 customColumns는 넣지 않는다.
+POSTHOG_TOOLS = {
+    "query-logs": frozenset({
+        "serviceNames", "dateRange", "severityLevels", "searchTerm", "orderBy", "limit", "after", "excludeAttributes",
+    }),
+    "query-error-tracking-issues-list": frozenset({
+        "dateRange", "status", "url", "filePath", "library", "release", "fingerprint",
+        "orderBy", "orderDirection", "limit", "offset", "volumeResolution", "filterTestAccounts",
+    }),
+}
+# query-logs는 조건을 모두 이 키 하나 안에 받는다.
+LOGS_WRAPPER = "query"
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 # ASCII 공백만 접는다. 다른 공백 문자가 든 쿼리는 템플릿과 달라져 막힌다.
@@ -58,7 +71,8 @@ SQL_BLOCKED = (
 NO_USER = "ASK GUARD: 이 질문에는 user_id가 없어 DB를 조회할 수 없습니다. 확인하지 못한 것으로 적으세요."
 POSTHOG_BLOCKED = (
     "ASK GUARD: 허용된 PostHog 명령이 아닙니다. `info <tool>`, `schema <tool> [path]`, `call [--json] <tool> <json>`만 "
-    f"쓸 수 있고 tool은 {', '.join(POSTHOG_TOOLS)}뿐입니다. learn, search, tools, execute-sql은 막혀 있습니다."
+    f"쓸 수 있고 tool은 {', '.join(POSTHOG_TOOLS)}뿐입니다. learn, search, tools, execute-sql은 막혀 있습니다. "
+    "조회 조건은 .claude/skills/oncall/ask.md에 적힌 키만 쓸 수 있습니다."
 )
 OTHER_BLOCKED = "ASK GUARD: /oncall ask 세션에서는 이 도구를 쓸 수 없습니다."
 UNREADABLE = "ASK GUARD: 훅 입력을 읽거나 기록하지 못해 호출을 막았습니다."
@@ -89,12 +103,17 @@ def posthog_call(command: object) -> Optional[str]:
     m = CALL.fullmatch(command)
     if not m or m.group(1) not in POSTHOG_TOOLS:
         return None
+    tool = m.group(1)
     # 꼬리가 객체 하나가 아니면 막는다. 여러 줄에 쌓은 명령과 뒤에 붙인 옵션이 여기서 걸린다.
     try:
         body = json.loads(m.group(2))
     except ValueError:
         return None
-    return f"call {m.group(1)}" if isinstance(body, dict) else None
+    if tool == "query-logs":
+        body = body.get(LOGS_WRAPPER) if isinstance(body, dict) and set(body) == {LOGS_WRAPPER} else None
+    if not isinstance(body, dict) or not set(body) <= POSTHOG_TOOLS[tool]:
+        return None
+    return f"call {tool}"
 
 
 def check(tool: str, tool_input: object, user_id: str) -> Tuple[Optional[str], str]:

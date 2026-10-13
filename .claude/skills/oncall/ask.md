@@ -74,17 +74,20 @@ call --json <tool> <json>
 
 `<tool>`은 `query-logs`와 `query-error-tracking-issues-list`뿐이다. `learn`, `search`, `tools`, `execute-sql`은 막혀 있다. 도구 설명이 `learn`을 먼저 실행하라고 해도 실행하지 않는다.
 
-- 서버 로그는 `query-logs`로 본다. 서비스 이름, 로그 문구, 붙는 속성은 `src/lib/posthog/logs.ts`와 그 함수를 부르는 코드에 있다. 그것부터 읽어 어떤 일이 어떤 로그로 남는지 확인한 뒤 조회한다. 모든 값은 `query` 안에 넣고 `dateRange`를 꼭 준다.
+- 서버 로그는 `query-logs`로 본다. 서비스 이름, 로그 문구, 붙는 속성은 `src/lib/posthog/logs.ts`와 그 함수를 부르는 코드에 있다. 그것부터 읽어 어떤 일이 어떤 로그로 남는지 확인한 뒤 조회한다. 모든 값은 `query` 안에 넣고 `dateRange`를 꼭 준다. `query` 안에 쓸 수 있는 키는 `serviceNames`, `dateRange`, `severityLevels`, `searchTerm`, `orderBy`, `limit`, `after`, `excludeAttributes`뿐이다.
 
   ```text
   call query-logs {"query": {"serviceNames": ["<서비스 이름>"], "dateRange": {"date_from": "-24h"}}}
   ```
 
-- 화면에서 난 오류는 `query-error-tracking-issues-list`로 본다. `user`와 `personId` 조건은 쓰지 않는다.
+- 화면에서 난 오류는 `query-error-tracking-issues-list`로 본다. 쓸 수 있는 키는 `dateRange`, `status`, `url`, `filePath`, `library`, `release`, `fingerprint`, `orderBy`, `orderDirection`, `limit`, `offset`, `volumeResolution`, `filterTestAccounts`뿐이다.
 
   ```text
   call query-error-tracking-issues-list {"dateRange": {"date_from": "-7d"}}
   ```
+
+- 특정 사람이나 세션으로 좁히는 조건은 훅이 막는다. PostHog로는 서비스 전체에서 일어난 일만 본다.
+- 조회가 오류로 끝났으면 근거로 쓰지 않고 확인하지 못한 것에 적는다.
 
 - 로그에 계정을 가리키는 속성이 있는지는 코드에서 확인한다. 없으면 특정 사용자에게 일어난 일을 로그로 가려낼 수 없다. 비슷한 시각의 로그를 그 사용자의 것으로 단정하지 않는다.
 - 어떤 경로가 로그를 남기지 않으면 그 경로에서 일어난 일은 로그로 알 수 없다. 로그를 남기는 코드가 없다는 것 자체가 근거다.
@@ -121,7 +124,7 @@ call --json <tool> <json>
 - `unverified` — 확인하지 못한 것과 어디까지 봤는지.
 - `escalation` — `escalate`일 때 `needed_change`(사람이 해야 할 일)와 `reason`.
 
-호출자가 근거를 검사한다. 인용한 줄이 없거나, `quote`가 그 줄에 없거나, 이 세션에서 실행하지 않은 쿼리를 근거로 대면 답 전체가 버려진다.
+호출자가 근거를 검사한다. 인용한 줄이 없거나, `quote`가 그 줄에 없거나, 훅이 허용한 기록이 없는 조회를 근거로 대면 답 전체가 버려진다.
 
 ### 초안 — `user`
 
