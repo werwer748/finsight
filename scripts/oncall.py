@@ -62,6 +62,8 @@ ASSIGNMENT = re.compile(
     re.IGNORECASE,
 )
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# 색 코드 밖의 이스케이프와 나머지 제어 문자. 줄바꿈과 탭은 남긴다.
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 TIMESTAMP = re.compile(r"^﻿?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ?", re.MULTILINE)
 BINARY = re.compile(r"^(?:GIT binary patch|Binary files .* differ)$", re.MULTILINE)
 
@@ -82,10 +84,10 @@ def has_secret(text: str) -> bool:
 
 
 def clean_log(raw: str) -> str:
-    """ANSI 코드와 타임스탬프를 떼고 시크릿을 가린 뒤 끝부분만 남긴다."""
+    """ANSI 코드, 제어 문자, 타임스탬프를 떼고 시크릿을 가린 뒤 끝부분만 남긴다."""
     # 색 코드가 토큰 중간에 끼어 있으면 패턴이 맞지 않으므로 먼저 뗀다.
     # 자른 뒤에 가리면 BEGIN 줄이 잘려 나간 개인키가 남으므로 가리기를 먼저 한다.
-    text = redact(TIMESTAMP.sub("", ANSI.sub("", raw)))
+    text = redact(TIMESTAMP.sub("", CONTROL.sub("", ANSI.sub("", raw))))
     return "\n".join(text.splitlines()[-LOG_TAIL:]) + "\n"
 
 
@@ -142,6 +144,18 @@ def _run(cmd: List[str]) -> str:
     return r.stdout
 
 
+def _job_log(job_id: int) -> str:
+    """job 하나의 원본 로그. 다른 job의 로그는 받지 않는다."""
+    path = f"{API}/actions/jobs/{job_id}/logs"
+    # 로그에는 색 코드가 있어서 새 gh는 이 옵션 없이는 응답을 출력하지 않는다. 옛 gh에는 이 옵션이 없다.
+    try:
+        return _run(["gh", "api", "--allow-escape-sequences", path])
+    except OncallError as e:
+        if "unknown flag" not in str(e):
+            raise
+        return _run(["gh", "api", path])
+
+
 def _check_checkout(sha: str) -> None:
     """작업 트리가 깨끗하고 HEAD가 실패한 커밋인지 확인한다. 아니면 수정이 다른 커밋 위에 얹힌다."""
     if _run(["git", "status", "--porcelain"]).strip():
@@ -175,7 +189,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     _check_checkout(run["head_sha"])
     job, step = failed_step(jobs)
     # 실패한 CI job의 로그만 받는다. 다른 job의 로그는 에이전트에게 주지 않는다.
-    log = clean_log(_run(["gh", "api", f"{API}/actions/jobs/{job['id']}/logs"]))
+    log = clean_log(_job_log(job["id"]))
     WORKDIR.mkdir(exist_ok=True)
     (WORKDIR / "failed.log").write_text(log, encoding="utf-8")
     _write_output(args.output, ready="true", step=STEPS[step])
