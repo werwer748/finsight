@@ -148,6 +148,11 @@ class TestCleanLog:
         )
         assert oncall.clean_log(raw) == "##[group]Run npm run test\nFAIL src/lib/a.test.ts\n"
 
+    def test_strips_other_control_characters(self):
+        # 색 코드 밖의 이스케이프(OSC 등)도 남기지 않는다. 탭은 남긴다.
+        out = oncall.clean_log("\x1b]0;title\x07FAIL\ta.test.ts\r\n\x1b(Bdone\x08\n")
+        assert out == "]0;titleFAIL\ta.test.ts\n(Bdone\n"
+
     def test_masks_secrets(self):
         assert ANTHROPIC not in oncall.clean_log(f"2026-10-08T08:34:28.0000000Z key {ANTHROPIC}\n")
 
@@ -229,6 +234,8 @@ class TestSkipReason:
 # subprocess.run 대역
 # ---------------------------------------------------------------------------
 
+ESCAPE_OPTION = "--allow-escape-sequences"
+LOG_PATH = "repos/{owner}/{repo}/actions/jobs/7/logs"
 RAW_LOG = (
     "2026-10-08T08:34:27.1820157Z ##[group]Run npm run test\n"
     f"2026-10-08T08:34:28.0000000Z leaked {ANTHROPIC}\n"
@@ -236,7 +243,8 @@ RAW_LOG = (
 )
 
 
-def fake_run(run=None, jobs=None, prs=None, status="", head=SHA, fail=(), pr_url="https://github.com/o/r/pull/13"):
+def fake_run(run=None, jobs=None, prs=None, status="", head=SHA, fail=(), old_gh=False,
+             pr_url="https://github.com/o/r/pull/13"):
     """gh와 git 호출에 정해 둔 응답을 돌려주는 subprocess.run 대역. fail에 든 낱말이 명령에 있으면 실패시킨다."""
     run = run_info() if run is None else run
     jobs = [job(), REVIEW_JOB] if jobs is None else jobs
@@ -246,9 +254,11 @@ def fake_run(run=None, jobs=None, prs=None, status="", head=SHA, fail=(), pr_url
         line = " ".join(cmd)
         if any(word in line for word in fail):
             return MagicMock(returncode=1, stdout="", stderr="실패")
+        if old_gh and ESCAPE_OPTION in cmd:
+            return MagicMock(returncode=1, stdout="", stderr=f"unknown flag: {ESCAPE_OPTION}\n\nUsage:  gh api <endpoint> [flags]")
         out = ""
         if cmd[:2] == ["gh", "api"]:
-            path = cmd[2]
+            path = cmd[-1]
             if path.endswith("/logs"):
                 out = RAW_LOG
             elif "/pulls?" in path:
@@ -298,10 +308,24 @@ class TestPrepare:
         assert ANTHROPIC not in log
 
     def test_downloads_only_the_failed_ci_job_log(self, workdir):
+        # 로그에는 색 코드가 있어서 러너의 gh는 이 옵션 없이는 응답을 출력하지 않는다.
         with patch("subprocess.run", fake_run()) as mock_run:
             oncall.main(["prepare", "111"])
-        logs = [line for line in lines(mock_run) if line.endswith("/logs")]
-        assert logs == ["gh api repos/{owner}/{repo}/actions/jobs/7/logs"]
+        logs = [cmd for cmd in commands(mock_run) if cmd[-1].endswith("/logs")]
+        assert logs == [["gh", "api", ESCAPE_OPTION, LOG_PATH]]
+
+    def test_retries_without_the_escape_option_on_older_gh(self, workdir):
+        with patch("subprocess.run", fake_run(old_gh=True)) as mock_run:
+            assert oncall.main(["prepare", "111"]) == 0
+        logs = [cmd for cmd in commands(mock_run) if cmd[-1].endswith("/logs")]
+        assert logs == [["gh", "api", ESCAPE_OPTION, LOG_PATH], ["gh", "api", LOG_PATH]]
+        assert (workdir / ".oncall" / "failed.log").read_text(encoding="utf-8").startswith("##[group]Run npm run test")
+
+    def test_other_log_download_failures_are_not_retried(self, workdir):
+        with patch("subprocess.run", fake_run(fail=("/logs",))) as mock_run:
+            assert oncall.main(["prepare", "111"]) == 1
+        assert len([cmd for cmd in commands(mock_run) if cmd[-1].endswith("/logs")]) == 1
+        assert not (workdir / ".oncall").exists()
 
     def test_looks_up_open_prs_into_the_failing_branch(self, workdir):
         with patch("subprocess.run", fake_run(run=run_info(head_branch="feat/한글 x"))) as mock_run:
