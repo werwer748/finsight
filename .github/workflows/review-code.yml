@@ -143,8 +143,10 @@ jobs:
         if: steps.reproduce.outputs.failed == 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Bash 도구와 훅이 띄우는 프로세스의 환경에서 자격 증명을 지우고, /proc으로도 읽지 못하게 격리한다.
+          # Bash 도구와 훅이 띄우는 프로세스의 환경에서 자격 증명을 지우고, Bash 도구는 /proc으로도 읽지 못하게 격리한다.
           # 에이전트가 돌리는 테스트는 의존성 코드를 실행한다. 이 값이 없으면 그 코드가 토큰을 물려받는다.
+          # 격리되는 것은 이 세션의 Bash 도구뿐이다. 앞 단계의 npm ci와 Reproduce, 세션의 Stop 훅은 격리 밖에서
+          # 의존성 코드를 실행한다. 경계와 남은 위험은 scripts/AGENTS.md에 있다.
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: 1
           # scripts/tdd_guard.py가 이 값을 보고 통과시킨다. 실패한 CI가 이미 결함을 드러냈다.
           ONCALL_ACTIVE: 1
@@ -173,7 +175,7 @@ jobs:
           fi
           # 끝까지 돈 에이전트는 고치지 않았더라도 보고서를 남긴다. 아무것도 없으면 on-call 자체가 고장 난 것이다.
           if [ -z "$(ls -A "$RUNNER_TEMP/oncall")" ]; then
-            echo "::error::on-call 에이전트가 보고서도 수정도 남기지 않았습니다."
+            echo "::error::on-call 에이전트가 보고서도, 검증을 통과한 수정도 남기지 않았습니다."
             exit 1
           fi
           echo "handoff=true" >> "$GITHUB_OUTPUT"

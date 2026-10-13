@@ -7,6 +7,7 @@ gh와 git은 실제로 띄우지 않고 subprocess.run을 mock으로 대체한�
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -442,7 +443,44 @@ class TestPublish:
         assert "#12" in body
         assert "자동 머지되지 않습니다" in body
         # GITHUB_TOKEN으로 연 PR의 워크플로우 실행은 사람이 승인해야 돈다.
-        assert "승인" in body
+        # 승인하면 PR 쪽 스크립트가 시크릿과 함께 실행되므로 변경 확인을 먼저 안내한다.
+        assert "변경 내용을 확인한 뒤" in body
+        assert body.index("변경 내용을 확인한 뒤") < body.index("승인하면")
+        assert "⚠️" not in body
+
+    @pytest.mark.parametrize("path", [
+        ".github/workflows/review-code.yml",
+        ".claude/settings.json",
+        "scripts/review_gate.py",
+        "package.json",
+        "package-lock.json",
+        "src/app/CLAUDE.md",
+    ])
+    def test_warns_when_patch_touches_review_settings_or_dependencies(self, handoff, path):
+        # 수정 범위는 막지 않는다. 고친 판이 시크릿과 함께 실행될 수 있다는 것만 사람에게 알린다.
+        (handoff / "fix.patch").write_text(PATCH.replace("src/lib/total.ts", path), encoding="utf-8")
+        mock = fake_run()
+        assert publish(handoff, mock) == 0
+        (body,) = mock.bodies
+        assert "⚠️" in body
+        assert "승인하지 마세요" in body
+
+    def test_warns_when_a_protected_file_is_moved_away(self, handoff):
+        moved = (
+            "diff --git a/scripts/tdd_guard.py b/tools/guard.py\n"
+            "similarity index 100%\n"
+            "rename from scripts/tdd_guard.py\n"
+            "rename to tools/guard.py\n"
+        )
+        (handoff / "fix.patch").write_text(PATCH + moved, encoding="utf-8")
+        mock = fake_run()
+        assert publish(handoff, mock) == 0
+        assert "⚠️" in mock.bodies[0]
+
+    def test_protected_paths_match_the_auto_merge_job(self):
+        # 같은 목록이 워크플로우의 auto-merge job에도 있다. 한쪽만 바뀌면 경고와 자동 머지 제외가 어긋난다.
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        assert oncall.PROTECTED.pattern == re.search(r"PROTECTED: '(.+)'", workflow).group(1)
 
     def test_report_is_masked_in_summary_and_body(self, handoff, capsys):
         (handoff / "report.md").write_text(f"## 원인\n토큰 {ANTHROPIC} 이 로그에 찍혔다.\n", encoding="utf-8")
@@ -615,6 +653,10 @@ class TestWorkflow:
         (agent,) = [step for step in steps(self.oncall_job) if "claude -p" in step]
         assert "2> /dev/null" not in agent
         assert '2> "$RUNNER_TEMP/agent.err"' in agent
+
+    def test_empty_handoff_message_covers_fixes_that_failed_verification(self):
+        # 에이전트가 고쳤지만 재검증에서 떨어지고 보고서도 없을 때도 이 분기로 온다.
+        assert "보고서도, 검증을 통과한 수정도 남기지 않았습니다" in self.oncall_job
 
     def test_handoff_artifact_expires_in_a_day(self):
         assert "retention-days: 1" in self.oncall_job

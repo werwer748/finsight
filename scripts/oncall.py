@@ -66,6 +66,11 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 TIMESTAMP = re.compile(r"^﻿?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ?", re.MULTILINE)
 BINARY = re.compile(r"^(?:GIT binary patch|Binary files .* differ)$", re.MULTILINE)
+# 리뷰·CI 설정과 의존성. 워크플로우 auto-merge job의 PROTECTED와 같은 패턴이고, 테스트가 둘이 같은지 본다.
+PROTECTED = re.compile(
+    r"^(\.github/|\.githooks/|\.claude/|\.codex/|scripts/|package\.json$|package-lock\.json$|\.npmrc$)|(^|/)CLAUDE(\.local)?\.md$"
+)
+DIFF_HEADER = re.compile(r"^diff --git a/(.+?) b/(.+)$", re.MULTILINE)
 
 
 class OncallError(Exception):
@@ -137,6 +142,11 @@ def patch_problem(patch: str) -> Optional[str]:
     return None
 
 
+def touches_protected(patch: str) -> bool:
+    """패치가 리뷰·CI 설정이나 의존성을 고치는가. 옮긴 파일은 옛 경로도 본다."""
+    return any(PROTECTED.search(path) for pair in DIFF_HEADER.findall(patch) for path in pair)
+
+
 def _run(cmd: List[str]) -> str:
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -197,13 +207,21 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
-def _footer(run_url: str, pr: Optional[int]) -> str:
+def _footer(run_url: str, pr: Optional[int], protected: bool) -> str:
     lines = ["---", "on-call 에이전트가 CI 실패를 보고 만든 수정입니다.", "", f"- 실패한 실행: {run_url}"]
     if pr:
         lines.append(f"- 원래 PR: #{pr}")
     lines += [
         "- 검증: on-call job 안에서 lint·build·test를 통과한 패치입니다.",
-        "- 이 PR의 CI와 리뷰는 승인 대기 상태로 멈춰 있습니다. 돌리려면 이 PR에서 워크플로우 실행을 승인하세요.",
+        # 승인하면 PR 쪽 스크립트가 시크릿과 함께 실행되므로 확인을 먼저 안내한다.
+        "- 이 PR의 CI와 리뷰는 승인 대기 상태로 멈춰 있습니다. 변경 내용을 확인한 뒤 이 PR에서 워크플로우 실행을 승인하면 돕니다.",
+    ]
+    if protected:
+        lines.append(
+            "- ⚠️ 이 패치는 리뷰·CI 설정이나 의존성을 고칩니다. 워크플로우를 승인하면 고친 판이 시크릿과 함께 실행됩니다. "
+            "변경을 확인하기 전에는 승인하지 마세요."
+        )
+    lines += [
         "- **자동 머지되지 않습니다.** 테스트가 약해지지 않았는지 확인하고 직접 머지하세요.",
         "",
         "🤖 Generated with [Claude Code](https://claude.com/claude-code)",
@@ -242,7 +260,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
         return 1
 
     body_file = folder / "body.md"
-    body_file.write_text(f"{report}\n\n{_footer(run_url, args.pr)}", encoding="utf-8")
+    body_file.write_text(f"{report}\n\n{_footer(run_url, args.pr, touches_protected(patch))}", encoding="utf-8")
     try:
         url = _run(["gh", "pr", "create", "--base", args.base, "--head", branch,
                     "--title", title, "--body-file", str(body_file)]).strip()
