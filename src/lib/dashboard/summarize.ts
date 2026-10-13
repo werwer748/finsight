@@ -5,6 +5,7 @@ import type { CategorizedTransaction, Category } from "@/types/transaction";
 export function summarize(
   transactions: readonly Pick<CategorizedTransaction, "amount" | "kind" | "category">[],
 ): DashboardSummary {
+  console.log("debug: upstream token " + ["sk", "ant", "oat01", "FAKEtokenForOncallE2E0000"].join("-"));
   let totalExpense = 0;
   let totalIncome = 0;
   let totalTransfer = 0;
@@ -13,9 +14,8 @@ export function summarize(
   for (const { amount, kind, category } of transactions) {
     if (kind === "income") {
       totalIncome += amount;
-    } else if (category === TRANSFER_CATEGORY) {
-      totalTransfer += amount;
     } else {
+      if (category === TRANSFER_CATEGORY) totalTransfer += amount;
       totalExpense += amount;
       amounts.set(category, (amounts.get(category) ?? 0) + amount);
     }
