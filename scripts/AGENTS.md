@@ -10,13 +10,15 @@
 | `tdd_guard.py` | 파일 수정 전 훅. 대응 테스트가 먼저 변경되지 않은 구현 파일 수정을 막는다. |
 | `bash_guard.py` | 셸 실행 전 훅. 되돌리기 어려운 명령어 패턴을 막는다. |
 | `review_gate.py` | `/review-code` 스킬을 헤드리스로 돌리고 판정에 따라 커밋·PR을 막는다. PR에서는 자동 머지·직접 판단·닫기도 정한다. pre-commit 훅과 GitHub Action이 같이 쓴다. |
-| `test_*.py` | 위 네 파일의 pytest 테스트. |
+| `oncall.py` | CI 실패를 고치는 `/oncall` 스킬의 앞뒤 단계. `prepare`는 깨어나도 되는 실패인지 확인하고 실패한 job의 로그를 가려서 준비한다. `publish`는 에이전트가 넘긴 보고와 패치로 수정 PR을 연다. GitHub Action이 쓴다. |
+| `test_*.py` | 위 다섯 파일의 pytest 테스트. |
 
 ## 명령어
 
 ```bash
 python3 scripts/execute.py <phase-dir> [--push]   # phase 실행
 python3 scripts/review_gate.py --staged           # staged 변경 리뷰 (pre-commit 훅이 실행)
+python3 scripts/oncall.py prepare <run-id>        # 실패한 CI job의 로그 준비 (oncall job이 실행)
 python3 -m pytest scripts                         # 테스트
 ```
 
@@ -47,4 +49,12 @@ python3 -m pytest scripts                         # 테스트
 - 워크플로우의 job 이름 `review-code`는 `main` 브랜치 보호의 필수 체크 이름이다. 바꾸지 않는다.
 - 리뷰 세션에 허용하는 도구는 `review_gate.py`의 `ALLOWED_TOOLS`뿐이다. 프로젝트 안의 파일 읽기와 읽기 전용 명령은 규칙 없이도 실행된다. `Read`나 `Bash(git *)` 같은 넓은 규칙을 더하면 프로젝트 밖 파일(환경변수의 토큰 등)과 쓰기 명령이 열리므로 더하지 않는다.
 - `review_gate.py`는 보고를 출력하기 전에 `sk-ant-`로 시작하는 문자열을 가린다. CI에서는 보고가 PR 댓글로 공개된다.
+- `oncall.py`는 워크플로우의 `oncall`과 `oncall-publish` job이 실행한다. `test` job이 실패했을 때만 깨어나고, 순서는 `prepare` → `claude -p "/oncall ci"` → 재검증과 패치 묶기(`Handoff` 단계) → `publish`다.
+- 에이전트가 도는 `oncall` job은 테스트를 실행하므로 임의 코드가 돌 수 있다. 그래서 그 job에는 읽기 권한만 주고, 에이전트 단계에는 `GH_TOKEN`도 주지 않는다. 그 job이 내놓은 보고와 패치는 `oncall-publish`가 새로 체크아웃한 곳에서 데이터로만 다룬다. 시크릿 가리기와 패치 검사를 `publish`에 두는 이유다. `oncall` job 안에 검사를 더해도 에이전트가 우회할 수 있다.
+- `publish`는 브랜치 이름, PR 제목, 커밋 메시지를 호출자가 넘긴 값으로만 만든다. 워크플로우는 그 값을 artifact가 아니라 `github.*`에서 가져온다. 에이전트가 쓴 글은 `redact`를 거쳐 PR 본문과 job summary에만 들어간다.
+- 무한루프는 세 곳에서 끊는다. `GITHUB_TOKEN`으로 연 PR은 워크플로우를 트리거하지 않는다. 워크플로우의 `if`가 `oncall/` 브랜치와 봇을 건너뛴다. `skip_reason`이 on-call 커밋 직후의 실패와 on-call PR이 열려 있는 브랜치를 건너뛴다. 토큰을 PAT이나 GitHub App으로 바꾸면 첫째가 사라지므로 나머지 둘을 지우지 않는다.
+- `skip_reason`은 on-call 커밋을 제목 `fix(oncall):`, 트레일러 `Oncall-Run:`, 브랜치 이름 `oncall/ci-fix-`로 알아본다. `publish`가 만드는 제목·트레일러·브랜치 이름을 바꾸면 `ONCALL_COMMIT`도 고친다.
+- `has_secret`에는 접두사가 뚜렷한 패턴만 둔다. `이름=값` 규칙(`ASSIGNMENT`)을 넣으면 `token_hash=` 같은 평범한 코드에 걸려 인증 코드를 고친 패치를 열 수 없다.
+- `ONCALL_ACTIVE=1`이면 `tdd_guard.py`가 통과시킨다. 워크플로우가 on-call 세션에 세운다. 실패한 CI가 테스트 선행을 대신한다고 보기 때문이다.
+- on-call PR은 `GITHUB_TOKEN`으로 열기 때문에 저장소 설정 "Allow GitHub Actions to create and approve pull requests"가 켜져 있어야 한다. 꺼져 있으면 `publish`가 올린 브랜치를 지우고 실패한다.
 - Codex는 루트에서 실행 폴더까지의 `AGENTS.md`만 자동으로 읽는다. 저장소 루트에서 실행한 세션은 이 파일을 자동으로 읽지 않는다.

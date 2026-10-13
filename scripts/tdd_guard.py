@@ -69,6 +69,10 @@ def target_paths(payload: dict) -> List[str]:
 
 
 def main():
+    # on-call 세션은 실패한 CI가 이미 결함을 드러낸 상태에서 고친다. 이 값은 세션을 띄우는 쪽(워크플로우)이 세운다.
+    if os.environ.get("ONCALL_ACTIVE"):
+        return
+
     payload = json.load(sys.stdin)
     paths = target_paths(payload)
     if not paths:

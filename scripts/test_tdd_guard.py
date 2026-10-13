@@ -120,8 +120,9 @@ class TestCheck:
 # main() — 훅으로 실행될 때의 입출력
 # ---------------------------------------------------------------------------
 
-def run_hook(payload, project_dir=None):
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+def run_hook(payload, project_dir=None, **extra_env):
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PROJECT_DIR", "ONCALL_ACTIVE")}
+    env.update(extra_env)
     if project_dir:
         env["CLAUDE_PROJECT_DIR"] = str(project_dir)
     return subprocess.run(
@@ -151,6 +152,16 @@ class TestMain:
             "cwd": str(project),
         }
         assert run_hook(payload).returncode == 2
+
+    def test_oncall_session_edits_implementation_without_touching_the_test(self, project):
+        # on-call은 실패한 CI가 이미 결함을 드러낸 상태에서 고친다. 커밋된 실패 테스트는 변경으로 잡히지 않는다.
+        write(project, "src/lib/foo.test.ts")
+        commit_all(project)
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": str(project / "src/lib/foo.ts")}}
+        assert run_hook(payload, project_dir=project).returncode == 2
+        r = run_hook(payload, project_dir=project, ONCALL_ACTIVE="1")
+        assert r.returncode == 0
+        assert r.stderr == ""
 
 
 # ---------------------------------------------------------------------------

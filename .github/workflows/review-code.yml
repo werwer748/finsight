@@ -68,11 +68,144 @@ jobs:
       - run: npm run build
       - run: npm run test
 
+  oncall:
+    # test job(lint·build·test)이 실패했을 때만 깨어난다. 리뷰 판정의 실패는 다루지 않는다.
+    # draft, 포크, 봇이 열었거나 일으킨 PR, on-call이 만든 브랜치는 건너뛴다. 나머지 가드는 scripts/oncall.py의 skip_reason에 있다.
+    needs: test
+    if: >-
+      ${{ failure() && needs.test.result == 'failure'
+      && !github.event.pull_request.draft
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && !startsWith(github.head_ref, 'oncall/')
+      && github.event.pull_request.user.type != 'Bot'
+      && github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # 에이전트가 도는 job에는 읽기 권한만 준다. 수정 PR은 oncall-publish가 연다.
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      step: ${{ steps.prepare.outputs.step }}
+      handoff: ${{ steps.handoff.outputs.handoff }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # test job은 base와 합친 커밋에서 돌지만 수정은 PR 브랜치 위에 얹는다.
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Prepare
+        id: prepare
+        env:
+          # 실패 로그를 받는 이 단계에만 준다.
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        # 기본 셸에는 pipefail이 없어 tee로 이으면 스크립트의 실패가 묻힌다.
+        shell: bash
+        run: |
+          # 이 기능이 들어오기 전에 딴 브랜치에는 스크립트와 스킬이 없다.
+          if [ ! -f scripts/oncall.py ] || [ ! -f .claude/skills/oncall/SKILL.md ]; then
+            echo "on-call: 이 브랜치에는 on-call 도구가 없어 건너뜁니다." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 scripts/oncall.py prepare "$RUN_ID" --output "$GITHUB_OUTPUT" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-node@v6
+        if: steps.prepare.outputs.ready == 'true'
+        with:
+          node-version: 22
+      - run: npm ci
+        if: steps.prepare.outputs.ready == 'true'
+      - name: Reproduce
+        id: reproduce
+        if: steps.prepare.outputs.ready == 'true'
+        run: |
+          # PR 브랜치만으로 통과하면 base와 합친 상태에서만 깨지거나 일시적인 실패다. 여기서는 고칠 수 없다.
+          if npm run lint && npm run build && npm run test; then
+            echo "on-call: PR 브랜치만으로는 실패가 재현되지 않아 건너뜁니다. base와 합친 상태에서만 깨지거나 일시적인 실패입니다." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - run: npm install -g @anthropic-ai/claude-code
+        if: steps.reproduce.outputs.failed == 'true'
+      - name: Fix
+        if: steps.reproduce.outputs.failed == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Bash 도구와 훅이 띄우는 프로세스의 환경에서 자격 증명을 지운다.
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: 1
+          # scripts/tdd_guard.py가 이 값을 보고 통과시킨다. 실패한 CI가 이미 결함을 드러냈다.
+          ONCALL_ACTIVE: 1
+        # 저장소가 공개라 Actions 로그는 누구나 본다. 에이전트가 쓴 글은 로그에 찍지 않고 실행 정보만 남긴다.
+        run: |
+          timeout 20m claude -p "/oncall ci" --output-format json --permission-mode dontAsk \
+            --allowedTools Edit Write "Bash(npm run lint)" "Bash(npm run build)" "Bash(npm run test)" \
+            < /dev/null > "$RUNNER_TEMP/agent.json" 2> /dev/null || echo "::warning::on-call 에이전트가 오류로 끝났습니다."
+          jq -r '"on-call 에이전트: \(.subtype) · \(.num_turns)턴 · \(.duration_ms)ms"' "$RUNNER_TEMP/agent.json" || true
+      - name: Handoff
+        id: handoff
+        if: steps.reproduce.outputs.failed == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/oncall"
+          if [ -f .oncall/report.md ]; then cp .oncall/report.md "$RUNNER_TEMP/oncall/report.md"; fi
+          # 에이전트가 남긴 변경을 먼저 묶어 두고, lint·build·test를 다시 통과한 것만 패치로 넘긴다.
+          # 제외 pathspec(':!.oncall')은 그 폴더가 무시 대상이면 git add를 실패시키므로 쓰지 않는다.
+          git add -A
+          git rm -r -q --cached --ignore-unmatch .oncall
+          if ! git diff --cached --quiet HEAD && npm run lint && npm run build && npm run test; then
+            git diff --cached HEAD > "$RUNNER_TEMP/oncall/fix.patch"
+          fi
+          if [ -n "$(ls -A "$RUNNER_TEMP/oncall")" ]; then echo "handoff=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/upload-artifact@v7
+        if: steps.handoff.outputs.handoff == 'true'
+        with:
+          name: oncall
+          path: ${{ runner.temp }}/oncall
+          # 공개 저장소의 artifact는 로그인한 누구나 받을 수 있다.
+          retention-days: 1
+
+  oncall-publish:
+    # 조상인 test가 실패했으므로 상태 함수가 없으면 건너뛰어진다.
+    needs: oncall
+    if: ${{ !cancelled() && needs.oncall.result == 'success' && needs.oncall.outputs.handoff == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 쓰기 권한 토큰은 이 job에만 준다. 에이전트도 패키지 스크립트도 돌리지 않고, 넘겨받은 보고와 패치는 데이터로만 다룬다.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # 수정 브랜치를 push해야 하므로 여기서는 자격 증명을 남긴다.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: oncall
+          path: ${{ runner.temp }}/oncall
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # 브랜치와 커밋은 artifact가 아니라 이벤트에서 가져온다.
+          BASE: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REPO: ${{ github.repository }}
+          STEP: ${{ needs.oncall.outputs.step }}
+        # 보고는 스크립트가 시크릿을 가린 뒤 출력한다. 기본 셸에는 pipefail이 없어 tee로 이으면 스크립트의 실패가 묻힌다.
+        shell: bash
+        run: |
+          python3 scripts/oncall.py publish "$RUNNER_TEMP/oncall" --base "$BASE" --sha "$HEAD_SHA" --pr "$PR_NUMBER" \
+            --run-id "$RUN_ID" --attempt "$RUN_ATTEMPT" --repo "$REPO" --step "$STEP" | tee -a "$GITHUB_STEP_SUMMARY"
+
   auto-merge:
     # 리뷰 판정이 merge이고 lint·build·test까지 통과한 PR만 머지한다.
     # 기본 브랜치로 가는 PR만 다룬다. base가 다른 PR을 리뷰한 뒤 base를 바꿔 리뷰하지 않은 커밋을 넣지 못하게 한다.
+    # on-call이 연 수정 PR은 머지하지 않는다. base 브랜치가 지워지면 그 PR의 base가 기본 브랜치로 바뀐다.
     needs: [review-code, test]
-    if: ${{ needs.review-code.outputs.decision == 'merge' && github.base_ref == github.event.repository.default_branch }}
+    if: ${{ needs.review-code.outputs.decision == 'merge' && github.base_ref == github.event.repository.default_branch && !startsWith(github.head_ref, 'oncall/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # 쓰기 권한 토큰은 Claude가 도는 job에 주지 않고 이 job에만 준다.
