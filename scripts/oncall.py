@@ -69,8 +69,8 @@ ASSIGNMENT = re.compile(
     re.IGNORECASE,
 )
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-# 색 코드 밖의 이스케이프와 나머지 제어 문자. 줄바꿈과 탭은 남긴다.
-CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# 색 코드 밖의 이스케이프와 나머지 제어 문자. 줄바꿈과 탭은 남긴다. \x80-\x9f에는 한 글자짜리 CSI(\x9b)가 있다.
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 TIMESTAMP = re.compile(r"^﻿?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ?", re.MULTILINE)
 BINARY = re.compile(r"^(?:GIT binary patch|Binary files .* differ)$", re.MULTILINE)
 # 리뷰·CI 설정과 의존성. 워크플로우 auto-merge job의 PROTECTED와 같은 패턴이고, 테스트가 둘이 같은지 본다.

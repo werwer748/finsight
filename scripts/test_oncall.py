@@ -1191,11 +1191,12 @@ class TestAskOutput:
 
     def test_control_characters_from_the_model_do_not_reach_the_terminal(self, askdir, capsys):
         # 백스페이스와 ESC는 터미널에서 인용 표시나 상태 줄을 덮어쓸 수 있다.
-        body = answer(draft="4MB까지예요.\x08\x08\x1b[2K\x1b[1A", unverified=["없음\x1b[2J"],
-                      evidence=[evidence(CODE_REF, claim="4MB까지다.\x08\x1b[31m")])
+        # \x9b는 한 글자짜리 CSI다.
+        body = answer(draft="4MB까지예요.\x08\x08\x1b[2K\x1b[1A\x9b2K", unverified=["없음\x1b[2J\x9b1A"],
+                      evidence=[evidence(CODE_REF, claim="4MB까지다.\x08\x1b[31m\x85")])
         assert ask(fake_claude(body)) == 0
         for text in (answer_file(askdir), capsys.readouterr().out):
-            assert "\x08" not in text and "\x1b" not in text
+            assert not re.search(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", text)
             assert "4MB까지예요." in text
 
     def test_reads_the_last_message_when_no_structured_output_comes(self, askdir):
