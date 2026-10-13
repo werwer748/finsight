@@ -595,6 +595,20 @@ class TestWorkflow:
         agent = next(i for i, step in enumerate(steps(self.oncall_job)) if "claude -p" in step)
         assert prepare < agent, names
 
+    def test_bubblewrap_is_installed_before_the_agent_starts(self):
+        # 하위 프로세스의 환경에서 토큰을 지우는 옵션은 Linux에서 bubblewrap이 없으면 claude를 시작시키지 않는다.
+        all_steps = steps(self.oncall_job)
+        install = next(i for i, step in enumerate(all_steps) if "apt-get install" in step and "bubblewrap" in step)
+        agent = next(i for i, step in enumerate(all_steps) if "claude -p" in step)
+        assert install < agent
+        assert "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: 1" in all_steps[agent]
+
+    def test_agent_startup_errors_reach_the_log(self):
+        # stderr를 버리면 claude가 시작하지 못한 이유를 알 수 없다.
+        (agent,) = [step for step in steps(self.oncall_job) if "claude -p" in step]
+        assert "2> /dev/null" not in agent
+        assert '2> "$RUNNER_TEMP/agent.err"' in agent
+
     def test_handoff_artifact_expires_in_a_day(self):
         assert "retention-days: 1" in self.oncall_job
 
@@ -719,9 +733,10 @@ class TestHandoffStep:
         assert not (folder / "fix.patch").exists()
         assert output == "handoff=true\n"
 
-    def test_nothing_to_hand_off(self, repo, tmp_path):
+    def test_agent_that_left_nothing_fails_the_job(self, repo, tmp_path):
+        # 끝까지 돈 에이전트는 고치지 않았더라도 보고서를 남긴다. 아무것도 없으면 on-call 자체가 고장 난 것이다.
         code, _, output = run_handoff_step(repo, tmp_path)
-        assert code == 0
+        assert code != 0
         assert output == ""
 
     def test_patch_applies_to_a_fresh_checkout(self, repo, tmp_path):
