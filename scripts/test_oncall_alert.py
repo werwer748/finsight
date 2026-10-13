@@ -4,6 +4,7 @@ oncall_alert.py 테스트.
 gh와 PostHog는 실제로 부르지 않고 subprocess.run과 urllib.request.urlopen을 mock으로 대체한다.
 """
 
+import http.client
 import io
 import json
 import re
@@ -102,12 +103,14 @@ class FakeResponse(io.BytesIO):
         return False
 
 
-def fake_urlopen(rows=None, error=None):
-    """PostHog 쿼리 API 대역. 쿼리 글자에 든 낱말로 응답을 고른다."""
+def fake_urlopen(rows=None, error=None, failures=None):
+    """PostHog 쿼리 API 대역. 쿼리 글자에 든 낱말로 응답을 고른다. failures를 주면 처음 그 횟수만 error를 낸다."""
     rows = ROWS if rows is None else rows
+    calls = []
 
     def respond(request, timeout=None):
-        if error:
+        calls.append(request)
+        if error and (failures is None or len(calls) <= failures):
             raise error
         sql = json.loads(request.data)["query"]["query"]
         found = next((value for key, value in rows.items() if key in sql), [])
@@ -367,6 +370,74 @@ class TestPrepare:
         assert out_file.read_text(encoding="utf-8") == "ready=true\n"
         captured = capsys.readouterr()
         assert POSTHOG_KEY not in captured.out + captured.err
+
+    @pytest.mark.parametrize("error", [
+        urllib.error.HTTPError("https://us.posthog.com", 504, "Gateway Timeout", {}, None),
+        urllib.error.HTTPError("https://us.posthog.com", 429, "Too Many Requests", {}, None),
+        urllib.error.URLError("timed out"),
+        # 응답 본문이 중간에 끊기면 난다. OSError가 아니다.
+        http.client.IncompleteRead(b""),
+    ], ids=["504", "429", "network", "cut-off"])
+    def test_retries_a_passing_posthog_failure(self, workdir, error):
+        # PostHog가 504를 한 번 돌려줘 자료 없이 판정한 노이즈가 Issue로 올라간 적이 있다.
+        clean = fake_urlopen()
+        prepare(urlopen=clean)
+        urlopen = fake_urlopen(error=error, failures=1)
+        with patch("time.sleep") as sleep:
+            assert prepare(urlopen=urlopen) == 0
+        data = prepared(workdir)
+        assert data["posthog_error"] is None
+        assert data["posthog"]["stats"]["users_1h"] == 4
+        assert urlopen.call_count == clean.call_count + 1
+        assert sleep.call_count == 1
+
+    def test_gives_up_on_a_failure_that_does_not_pass(self, workdir):
+        # 계속 실패하는 쿼리를 붙들고 있으면 job 제한 시간을 먹는다. 세 번이면 자료 없이 넘긴다.
+        error = urllib.error.HTTPError("https://us.posthog.com", 503, "Service Unavailable", {}, None)
+        urlopen = fake_urlopen(error=error)
+        with patch("time.sleep") as sleep:
+            assert prepare(urlopen=urlopen) == 0
+        data = prepared(workdir)
+        assert data["posthog"] is None
+        assert "503" in data["posthog_error"]
+        assert urlopen.call_count == 3
+        assert sleep.call_count == 2
+
+    def test_stops_asking_posthog_when_its_time_is_spent(self, workdir):
+        # 쿼리마다 다시 보내다 보면 triage job의 제한 시간을 넘긴다. 정해 둔 시간이 지나면 자료 없이 넘긴다.
+        now = [0.0]
+        error = urllib.error.HTTPError("https://us.posthog.com", 504, "Gateway Timeout", {}, None)
+        urlopen = fake_urlopen(error=error)
+        with patch("time.monotonic", lambda: now[0]), \
+                patch("time.sleep", side_effect=lambda seconds: now.__setitem__(0, now[0] + 10_000)):
+            assert prepare(urlopen=urlopen) == 0
+        data = prepared(workdir)
+        assert data["posthog"] is None
+        assert "시간" in data["posthog_error"]
+        assert urlopen.call_count == 1
+
+    def test_never_waits_for_posthog_longer_than_the_time_left(self, workdir):
+        now = [0.0]
+        error = urllib.error.HTTPError("https://us.posthog.com", 504, "Gateway Timeout", {}, None)
+        urlopen = fake_urlopen(error=error, failures=1)
+        with patch("time.monotonic", lambda: now[0]), \
+                patch("time.sleep", side_effect=lambda seconds: now.__setitem__(0, alert.POSTHOG_BUDGET - 15)):
+            assert prepare(urlopen=urlopen) == 0
+        assert prepared(workdir)["posthog_error"] is None
+        first, *rest = [call.kwargs["timeout"] for call in urlopen.call_args_list]
+        assert first == 60
+        assert rest and all(0 < timeout <= 15 for timeout in rest)
+
+    @pytest.mark.parametrize("code", [400, 401, 403])
+    def test_does_not_retry_a_rejected_request(self, workdir, code):
+        # 키나 쿼리가 틀린 것은 다시 보내도 같다.
+        error = urllib.error.HTTPError("https://us.posthog.com", code, "Rejected", {}, None)
+        urlopen = fake_urlopen(error=error)
+        with patch("time.sleep") as sleep:
+            assert prepare(urlopen=urlopen) == 0
+        assert str(code) in prepared(workdir)["posthog_error"]
+        assert urlopen.call_count == 1
+        assert sleep.call_count == 0
 
     def test_missing_posthog_settings_are_a_posthog_failure(self, workdir, monkeypatch):
         monkeypatch.delenv("POSTHOG_PERSONAL_API_KEY")

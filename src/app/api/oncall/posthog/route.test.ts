@@ -3,11 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 import { claimEvent, releaseEvent } from "@/lib/oncall/events";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { dispatchOncallAlert } from "@/services/github";
+import { dispatchOncallAlert, OncallDispatchError } from "@/services/github";
 
 vi.mock("@/lib/oncall/events", () => ({ claimEvent: vi.fn(), releaseEvent: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
-vi.mock("@/services/github", () => ({ dispatchOncallAlert: vi.fn() }));
+// 오류 클래스는 진짜를 쓴다. 라우트가 instanceof로 가려낸다.
+vi.mock("@/services/github", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/github")>()),
+  dispatchOncallAlert: vi.fn(),
+}));
 
 const SECRET = "s3cret-value-for-test";
 const ISSUE_ID = "01a13006-d265-7cf1-97c2-3b4b3cc88051";
@@ -162,5 +166,17 @@ describe("POST /api/oncall/posthog", () => {
     const logged = vi.mocked(console.error).mock.calls.flat().join(" ");
     expect(logged).toContain("DispatchError");
     expect(logged).not.toContain(SECRET);
+  });
+
+  it("GitHub가 거절했으면 실패 로그에 상태 코드도 남긴다", async () => {
+    // 이름만으로는 토큰이 틀렸는지(401), 권한이 없는지(403), 저장소에 못 닿는지(404) 알 수 없다.
+    vi.mocked(dispatchOncallAlert).mockRejectedValue(new OncallDispatchError(403));
+
+    const res = await POST(request());
+
+    expect(res.status).toBe(500);
+    const logged = vi.mocked(console.error).mock.calls.flat().join(" ");
+    expect(logged).toContain("OncallDispatchError");
+    expect(logged).toContain("403");
   });
 });

@@ -6,6 +6,18 @@ export const ONCALL_WORKFLOW = "oncall-alert.yml";
 const DISPATCH_TIMEOUT_MS = 10_000;
 const REPOSITORY = /^[\w.-]+\/[\w.-]+$/;
 
+// GitHub가 거절한 dispatch. 401(토큰 값), 403(권한), 404(저장소 접근)는 고칠 곳이 달라 웹훅이 status를 로그에 적는다.
+export class OncallDispatchError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    // 응답 본문에는 요청 정보가 섞일 수 있어 상태 코드만 남긴다.
+    super(`on-call 워크플로우를 깨우지 못했어요. HTTP 상태: ${status}`);
+    this.name = "OncallDispatchError";
+    this.status = status;
+  }
+}
+
 // on-call 워크플로우를 깨운다. 노이즈인지 신호인지는 CI의 헤드리스 에이전트가 판정한다.
 export async function dispatchOncallAlert(alert: OncallAlert): Promise<void> {
   const token = process.env.ONCALL_GITHUB_TOKEN;
@@ -40,8 +52,5 @@ export async function dispatchOncallAlert(alert: OncallAlert): Promise<void> {
       signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
     },
   );
-  // 응답 본문에는 요청 정보가 섞일 수 있어 상태 코드만 남긴다.
-  if (!response.ok) {
-    throw new Error(`on-call 워크플로우를 깨우지 못했어요. HTTP 상태: ${response.status}`);
-  }
+  if (!response.ok) throw new OncallDispatchError(response.status);
 }
