@@ -6,6 +6,7 @@ ONCALL_ASK_ACTIVE가 없으면 아무것도 하지 않는다. 있으면 아래 �
 stdin으로 훅 입력(JSON)을 받아, 차단해야 하면 stderr에 사유를 쓰고 exit 2 한다. 읽지 못한 입력도 막는다.
 결정마다 .oncall/ask/guard.log에 한 줄을 남긴다. scripts/oncall.py ask가 그 기록으로 답의 근거를 대조한다.
 기록은 호출 전에 쓴다. allow 줄은 호출을 허용했다는 뜻이고, 그 호출이 성공했다는 뜻은 아니다.
+SessionStart 훅으로도 등록되어, 세션이 시작될 때 가드가 켜졌다는 줄(armed)을 남긴다.
 """
 
 import json
@@ -18,6 +19,9 @@ from typing import Optional, Tuple
 SQL_TOOL = "mcp__supabase__execute_sql"
 POSTHOG_TOOL = "mcp__posthog__exec"
 LOG = Path(".oncall") / "ask" / "guard.log"
+# claude -p는 검증에 실패한 설정 파일을 알리지 않고 무시한다. 그러면 이 훅 없이 MCP 도구가 열린다.
+# 세션이 시작될 때 이 줄을 남겨, 호출자가 훅이 로드된 세션인지 알 수 있게 한다.
+ARMED = "armed"
 
 # 이 MCP의 role은 RLS를 우회해 모든 사용자의 원본 행을 읽는다. 그래서 쿼리를 통째로 고정한다.
 # 돌려주는 열은 건수, 날짜·시각의 최솟값·최댓값, 불리언뿐이다. 사용자가 쓴 글이 담긴 열은 돌려주지 않는다.
@@ -138,15 +142,19 @@ def main() -> int:
     # 여기서부터는 예외로 끝나면 안 된다. 훅은 exit 2일 때만 호출을 막는다.
     try:
         payload = json.load(sys.stdin)
-        tool = payload["tool_name"]
-        if not isinstance(tool, str):
-            raise TypeError("tool_name")
-        message, detail = check(tool, payload.get("tool_input"), os.environ.get("ONCALL_ASK_USER_ID", ""))
+        if payload.get("hook_event_name") == "SessionStart":
+            message, line = None, ARMED
+        else:
+            tool = payload["tool_name"]
+            if not isinstance(tool, str):
+                raise TypeError("tool_name")
+            message, detail = check(tool, payload.get("tool_input"), os.environ.get("ONCALL_ASK_USER_ID", ""))
+            # 쿼리와 명령의 글은 남기지 않는다. 질문에서 온 글이 들어 있을 수 있다.
+            line = f"{'block' if message else 'allow'}\t{tool}\t{detail}"
         log = Path(os.environ.get("CLAUDE_PROJECT_DIR") or ".") / LOG
         log.parent.mkdir(parents=True, exist_ok=True)
-        # 쿼리와 명령의 글은 남기지 않는다. 질문에서 온 글이 들어 있을 수 있다.
         with open(log, "a", encoding="utf-8") as f:
-            f.write(f"{'block' if message else 'allow'}\t{tool}\t{detail}\n")
+            f.write(f"{line}\n")
     except Exception:
         print(UNREADABLE, file=sys.stderr)
         return 2

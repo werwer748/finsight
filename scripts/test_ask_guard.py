@@ -355,6 +355,35 @@ class TestMainInAskSession:
         ]
 
 
+class TestSessionStart:
+    """세션이 시작될 때 가드가 켜졌다는 줄을 남긴다. 호출자는 이 줄이 없는 세션의 답을 버린다."""
+
+    START = {"hook_event_name": "SessionStart", "source": "startup"}
+
+    def test_records_that_the_guard_is_armed(self, tmp_path):
+        r = run_active(self.START, tmp_path)
+        assert r.returncode == 0
+        assert r.stderr == "" and r.stdout == ""
+        assert ledger(tmp_path) == [guard.ARMED]
+
+    def test_records_nothing_outside_ask_session(self, tmp_path):
+        r = run_hook(self.START, tmp_path)
+        assert r.returncode == 0
+        assert ledger(tmp_path) == []
+
+    def test_configured_hook_arms_the_ask_session(self, tmp_path):
+        settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        hooks = [hook["command"] for entry in settings["hooks"]["SessionStart"] for hook in entry["hooks"]]
+        assert hooks
+        for hook in hooks:
+            subprocess.run(
+                hook.replace("$CLAUDE_PROJECT_DIR", str(PROJECT_ROOT)), shell=True, input=json.dumps(self.START),
+                capture_output=True, text=True, cwd=tmp_path,
+                env=hook_env(CLAUDE_PROJECT_DIR=str(tmp_path), ONCALL_ASK_ACTIVE="1"),
+            )
+        assert ledger(tmp_path) == [guard.ARMED]
+
+
 # ---------------------------------------------------------------------------
 # .claude/settings.json 에 등록된 MCP PreToolUse 훅
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 from urllib.parse import quote
 
 import ask_guard
@@ -113,7 +113,10 @@ ASK_SCHEMA = {
     },
 }
 # 계좌·카드·전화번호처럼 보이는 숫자열. 날짜와 시각이 걸리지 않게 붙임표로만 이어진 10자리 이상과 4자리 네 묶음만 본다.
-LONG_DIGITS = re.compile(r"\d(?:-?\d){9,}|\b\d{4}(?: \d{4}){3}\b")
+# 경계는 \b가 아니라 숫자로 본다. 한글은 \w라서 "3456인데"의 숫자와 조사 사이에는 낱말 경계가 없다.
+LONG_DIGITS = re.compile(r"\d(?:-?\d){9,}|(?<!\d)\d{4}(?: \d{4}){3}(?!\d)")
+# 같은 이유로 ASCII 글자만 본다. \w로 쓰면 주소 뒤에 붙은 조사까지 가린다.
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 FILE_REF = re.compile(r"(.+):(\d+)(?:-(\d+))?")
 # 한두 글자짜리 인용은 어느 줄에나 있다.
 QUOTE_MIN = 8
@@ -322,9 +325,12 @@ def cmd_publish(args: argparse.Namespace) -> int:
 
 
 def clean_question(text: str) -> str:
-    """질문에서 제어 문자를 떼고 시크릿과 긴 숫자열을 가린다. 계좌·카드번호는 LLM에 보내지 않는다."""
-    text = LONG_DIGITS.sub(MASK, redact(CONTROL.sub("", ANSI.sub("", text))))
-    return text.strip()[:QUESTION_MAX]
+    """질문에서 제어 문자를 떼고 시크릿, 긴 숫자열, 이메일을 가린다. 계좌·카드번호와 이메일은 LLM에 보내지 않는다.
+
+    이름은 가려내지 못한다.
+    """
+    text = redact(CONTROL.sub("", ANSI.sub("", text)))
+    return LONG_DIGITS.sub(MASK, EMAIL.sub(MASK, text)).strip()[:QUESTION_MAX]
 
 
 def run_ask(user_id: Optional[str], timeout: int) -> dict:
@@ -370,16 +376,23 @@ def _spaces(text: str) -> str:
     return " ".join(text.split())
 
 
-def _file_evidence(kind: str, ref: str, quoted: object) -> Tuple[Optional[str], str]:
-    """(문제, 파일에서 읽은 줄). 인용한 줄이 저장소에 있고 quote가 그 근처에 있어야 한다."""
+def _quoted(text: str) -> List[str]:
+    """사람이나 모델이 쓴 여러 줄 글을 인용 블록으로 싣는다. 줄바꿈으로 answer.md의 절을 흉내 내지 못하게 한다."""
+    return [f"> {line}" if line.strip() else ">" for line in text.strip().splitlines()]
+
+
+def _file_evidence(kind: str, ref: str, quoted: object, tracked: Set[str]) -> Tuple[Optional[str], str]:
+    """(문제, 파일에서 읽은 줄). 인용한 줄이 저장소가 추적하는 파일에 있고 quote가 그 근처에 있어야 한다."""
     m = FILE_REF.fullmatch(ref)
     if not m:
         return "`경로:줄` 모양이 아닙니다", ""
     path, start, end = Path(m.group(1)), int(m.group(2)), int(m.group(3) or m.group(2))
-    if path.is_absolute() or ".." in path.parts or any(part.startswith(".env") for part in path.parts):
+    # 대소문자를 가리지 않는 파일 시스템에서는 .ENV.local이 .env.local을 연다.
+    if path.is_absolute() or ".." in path.parts or any(part.lower().startswith(".env") for part in path.parts):
         return "저장소 밖이거나 인용할 수 없는 경로입니다", ""
-    if not path.is_file() or not path.resolve().is_relative_to(Path.cwd().resolve()):
-        return "저장소에 없는 파일입니다", ""
+    # .git, 빌드 산출물, 로컬 설정처럼 추적되지 않는 파일은 근거가 아니다.
+    if path.as_posix() not in tracked or not path.is_file() or not path.resolve().is_relative_to(Path.cwd().resolve()):
+        return "저장소가 추적하는 파일이 아닙니다", ""
     expected = "doc" if path.parts[0] == "docs" or path.suffix == ".md" else "code"
     if kind != expected:
         return f"이 파일의 kind는 {expected}여야 합니다", ""
@@ -394,15 +407,17 @@ def _file_evidence(kind: str, ref: str, quoted: object) -> Tuple[Optional[str], 
     return None, " ".join(line.strip() for line in lines[start - 1:end])
 
 
-def _evidence(item: object, ledger: List[str]) -> Tuple[Optional[str], str]:
+def _evidence(item: object, ledger: List[str], tracked: Set[str]) -> Tuple[Optional[str], str]:
     """(문제, 호출자가 확인한 내용). 파일 인용은 파일과, 조회는 ask_guard.py가 남긴 기록과 대조한다."""
     if not isinstance(item, dict):
         return "근거 항목이 객체가 아닙니다", ""
     kind, ref, claim = item.get("kind"), item.get("ref"), item.get("claim")
     if not isinstance(ref, str) or not isinstance(claim, str) or not claim.strip():
         return "claim이나 ref가 없습니다", ""
+    if not isinstance(item.get("detail", ""), str):
+        return "detail이 글이 아닙니다", ""
     if kind in ("code", "doc"):
-        return _file_evidence(kind, ref, item.get("quote"))
+        return _file_evidence(kind, ref, item.get("quote"), tracked)
     if kind == "db":
         allowed = ref in ask_guard.SQL_TEMPLATES and f"allow\t{ask_guard.SQL_TOOL}\t{ref}" in ledger
     elif kind == "log":
@@ -414,11 +429,14 @@ def _evidence(item: object, ledger: List[str]) -> Tuple[Optional[str], str]:
     return (None, "이 세션에서 허용된 조회") if allowed else ("이 세션에서 허용된 조회 기록이 없습니다", "")
 
 
-def check_answer(answer: dict, audience: str, ledger: List[str]) -> Tuple[List[str], List[str]]:
+def check_answer(answer: dict, audience: str, ledger: List[str], tracked: Set[str]) -> Tuple[List[str], List[str]]:
     """(문제 목록, 근거마다 호출자가 확인한 내용). 문제가 하나라도 있으면 답을 초안으로 내지 않는다."""
     problems, confirmed = [], []
+    # 훅이 로드되지 않은 세션은 MCP로 무엇을 조회했는지 알 수 없다. 조회 근거가 없는 답이어도 버린다.
+    if ask_guard.ARMED not in ledger:
+        problems.append("가드가 켜진 기록이 없는 세션입니다. `.claude/settings.json`의 훅이 로드됐는지 확인하세요.")
     verdict = answer.get("verdict")
-    if verdict not in VERDICTS:
+    if not isinstance(verdict, str) or verdict not in VERDICTS:
         problems.append(f"verdict가 {', '.join(VERDICTS)} 중 하나가 아닙니다.")
     if not isinstance(answer.get("draft"), str) or not answer["draft"].strip():
         problems.append("초안이 비어 있습니다.")
@@ -427,7 +445,7 @@ def check_answer(answer: dict, audience: str, ledger: List[str]) -> Tuple[List[s
         problems.append("evidence가 목록이 아닙니다.")
         evidence = []
     for item in evidence:
-        problem, seen = _evidence(item, ledger)
+        problem, seen = _evidence(item, ledger, tracked)
         if problem:
             ref = item.get("ref") if isinstance(item, dict) else item
             problems.append(f"근거 `{ref}`: {problem}.")
@@ -438,10 +456,14 @@ def check_answer(answer: dict, audience: str, ledger: List[str]) -> Tuple[List[s
         # 문서는 계획이다. 사용자에게 동작을 말하려면 코드나 조회로 확인한 근거가 있어야 한다.
         elif audience == "user" and all(isinstance(item, dict) and item.get("kind") == "doc" for item in evidence):
             problems.append("사용자에게 가는 답의 근거가 문서뿐입니다.")
+    unverified = answer.get("unverified", [])
+    if not isinstance(unverified, list) or not all(isinstance(entry, str) for entry in unverified):
+        problems.append("unverified가 글의 목록이 아닙니다.")
     if verdict == "escalate":
         escalation = answer.get("escalation")
-        if not isinstance(escalation, dict) or not str(escalation.get("needed_change") or "").strip():
-            problems.append("escalate인데 escalation.needed_change가 없습니다.")
+        change = escalation.get("needed_change") if isinstance(escalation, dict) else None
+        if not isinstance(change, str) or not change.strip() or not isinstance(escalation.get("reason", ""), str):
+            problems.append("escalate인데 escalation의 needed_change가 없거나 값이 글이 아닙니다.")
     return problems, confirmed
 
 
@@ -454,7 +476,7 @@ def render_answer(question: str, answer: dict, audience: str, user_id: Optional[
             "# on-call ask — 근거 검증 실패", *head,
             "- 상태: 근거 검증 실패 — 보내지 않습니다. 아래는 확인되지 않은 글입니다.",
             "", "## 검증 실패", *[f"- {problem}" for problem in problems],
-            "", "## 질문", question,
+            "", "## 질문", *_quoted(question),
             "", "## 에이전트가 낸 답", "```json", json.dumps(answer, ensure_ascii=False, indent=2), "```",
         ]) + "\n"
 
@@ -466,19 +488,20 @@ def render_answer(question: str, answer: dict, audience: str, user_id: Optional[
             lines.append("- 본인 확인: 지정한 계정의 정보로 쓴 초안입니다. 보내기 전에 질문자가 그 계정의 주인인지 확인하세요.")
     else:
         lines.append("- 상태: 내부 답변")
-    lines += ["", "## 질문", question, "", "## 초안", answer["draft"].strip(), "", "## 근거"]
+    lines += ["", "## 질문", *_quoted(question), "", "## 초안", *_quoted(answer["draft"]), "", "## 근거"]
     for number, (item, seen) in enumerate(zip(answer["evidence"], confirmed), 1):
         # 파일 근거에는 모델이 적은 인용이 아니라 호출자가 파일에서 읽은 줄을 싣는다.
-        shown = f"파일의 줄: {seen}" if item["kind"] in ("code", "doc") else " ".join([seen + ".", item.get("detail") or ""])
-        lines += [f"{number}. {item['claim'].strip()}", f"   - {item['kind']} `{item['ref']}` — {shown.strip()}"]
+        shown = f"파일의 줄: {seen}" if item["kind"] in ("code", "doc") else f"{seen}. {_spaces(item.get('detail') or '')}"
+        lines += [f"{number}. {_spaces(item['claim'])}", f"   - {item['kind']} `{item['ref']}` — {shown.strip()}"]
     if not answer["evidence"]:
         lines.append("없음")
-    unverified = [str(entry) for entry in answer.get("unverified") or []]
+    # 모델이 쓴 한 줄짜리 값은 줄바꿈을 접어 싣는다.
+    unverified = [_spaces(entry) for entry in answer.get("unverified") or []]
     lines += ["", "## 확인하지 못한 것", *([f"- {entry}" for entry in unverified] or ["없음"])]
     escalation = answer.get("escalation")
     if answer["verdict"] == "escalate":
-        lines += ["", "## escalation", f"- 필요한 변경: {escalation['needed_change']}",
-                  f"- 사유: {escalation.get('reason') or '적지 않음'}"]
+        lines += ["", "## escalation", f"- 필요한 변경: {_spaces(escalation['needed_change'])}",
+                  f"- 사유: {_spaces(escalation.get('reason') or '') or '적지 않음'}"]
     return "\n".join(lines) + "\n"
 
 
@@ -492,6 +515,8 @@ def cmd_ask(args: argparse.Namespace) -> int:
     question = clean_question(args.question)
     if not question:
         raise OncallError("질문이 비어 있습니다.")
+    # 근거로 받는 것은 저장소가 추적하는 파일뿐이다.
+    tracked = set(_run(["git", "ls-files", "-z"]).split("\0"))
 
     ASK_DIR.mkdir(parents=True, exist_ok=True)
     # 지난 실행의 답과 가드 기록이 이번 답의 근거로 읽히지 않게 지운다.
@@ -509,7 +534,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
         # 호출자 없이 스킬을 직접 부르면 가드가 꺼져 있다. 입력을 남기지 않아야 스킬이 거기서 멈춘다.
         question_file.unlink(missing_ok=True)
 
-    problems, confirmed = check_answer(answer, args.audience, _read(ASK_DIR / "guard.log").splitlines())
+    problems, confirmed = check_answer(answer, args.audience, _read(ASK_DIR / "guard.log").splitlines(), tracked)
     # 인용은 파일의 글과 대조하므로 가리기는 검사 뒤에 한다.
     text = redact(render_answer(question, answer, args.audience, user_id, problems, confirmed))
     (ASK_DIR / "answer.md").write_text(text, encoding="utf-8")

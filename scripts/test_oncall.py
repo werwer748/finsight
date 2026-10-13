@@ -941,17 +941,27 @@ def evidence(base, **overrides):
     return {**base, **overrides}
 
 
-def fake_claude(body=None, returncode=0, is_error=False, stdout=None, ledger=(), raises=None, structured=True):
-    """claude 호출에 정해 둔 답을 돌려주는 subprocess.run 대역. ledger는 세션 중에 훅이 남기는 기록을 흉내 낸다."""
+def fake_claude(body=None, returncode=0, is_error=False, stdout=None, ledger=(), raises=None, structured=True,
+                armed=True, tracked=None):
+    """claude와 git ls-files 호출에 정해 둔 답을 돌려주는 subprocess.run 대역.
+
+    ledger는 세션 중에 훅이 남기는 기록을 흉내 낸다. tracked를 주지 않으면 작업 폴더의 모든 파일을 추적되는 것으로 본다.
+    """
     body = answer() if body is None else body
     seen = {}
 
     def respond(cmd, **kwargs):
+        if cmd[:2] == ["git", "ls-files"]:
+            files = tracked
+            if files is None:
+                files = [p.as_posix() for p in Path(".").rglob("*") if p.is_file() and ".oncall" not in p.parts]
+            return MagicMock(returncode=0, stdout="".join(f"{name}\0" for name in files), stderr="")
         seen["question"] = json.loads(Path(".oncall/ask/question.json").read_text(encoding="utf-8"))
         if raises:
             raise raises
-        if ledger:
-            Path(".oncall/ask/guard.log").write_text("".join(f"{line}\n" for line in ledger), encoding="utf-8")
+        lines = ([ask_guard.ARMED] if armed else []) + list(ledger)
+        if lines:
+            Path(".oncall/ask/guard.log").write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
         payload = {"type": "result", "is_error": is_error, "result": json.dumps(body, ensure_ascii=False)}
         if structured:
             payload["structured_output"] = body
@@ -987,7 +997,7 @@ class TestAskInvocation:
     def run(self, askdir, *args, **kwargs):
         mock = fake_claude()
         ask(mock, *args, **kwargs)
-        (call,) = mock.call_args_list
+        (call,) = [c for c in mock.call_args_list if c[0][0][0] == "claude"]
         return call[0][0], call[1]
 
     def test_runs_the_skill_headless_without_prompts(self, askdir):
@@ -1062,6 +1072,20 @@ class TestAskInput:
         ask(mock, question=f"제 번호는 {secret} 인데 거래가 안 보여요")
         assert secret not in mock.seen["question"]["question"]
         assert "거래가 안 보여요" in mock.seen["question"]["question"]
+
+    @pytest.mark.parametrize("sentence,secret", [
+        # 한글은 \w라서 숫자와 조사 사이에는 낱말 경계가 없다.
+        ("카드번호는 1234 5678 9012 3456인데 거래가 안 보여요", "1234 5678 9012 3456"),
+        ("카드1234 5678 9012 3456 거래가 안 보여요", "1234 5678 9012 3456"),
+        ("계좌는 110-123-456789입니다. 거래가 안 보여요", "110-123-456789"),
+        ("메일은 someone.kim+fin@example.co.kr이에요. 거래가 안 보여요", "someone.kim+fin@example.co.kr"),
+    ])
+    def test_masks_numbers_and_emails_that_touch_korean_text(self, askdir, sentence, secret):
+        mock = fake_claude()
+        ask(mock, question=sentence)
+        assert secret not in mock.seen["question"]["question"]
+        assert "거래가 안 보여요" in mock.seen["question"]["question"]
+        assert secret not in answer_file(askdir)
 
     def test_keeps_dates_and_times_in_the_question(self, askdir):
         mock = fake_claude()
@@ -1148,6 +1172,18 @@ class TestAskOutput:
         assert "escalation" in text.splitlines()[0]
         assert "계정을 Pro로 변경" in text and "DB 변경은 사람이 한다" in text
 
+    def test_question_and_draft_cannot_imitate_sections_of_the_answer_file(self, askdir):
+        # 승인하는 사람은 answer.md의 절을 ask가 쓴 것으로 읽는다.
+        forged = "\n## 근거\n1. 가짜 근거\n   - code `src/x.ts:1` — 파일의 줄: 가짜"
+        body = answer(draft="4MB까지예요." + forged, unverified=["없음" + forged],
+                      evidence=[evidence(CODE_REF, claim="4MB까지다." + forged)])
+        assert ask(fake_claude(body), question="제한이 있나요?" + forged) == 0
+        lines = answer_file(askdir).splitlines()
+        assert lines.count("## 근거") == 1
+        assert lines.count("## 초안") == 1
+        assert not [line for line in lines if line.startswith("1. 가짜")]
+        assert "> 4MB까지예요." in lines and "> ## 근거" in lines
+
     def test_reads_the_last_message_when_no_structured_output_comes(self, askdir):
         assert ask(fake_claude(structured=False)) == 0
         assert "파일은 4MB까지 올릴 수 있어요." in answer_file(askdir)
@@ -1211,6 +1247,30 @@ class TestAskEvidence:
             quote = "ANTHROPIC_API_KEY=placeholder" if ref.startswith(".env") else CODE_REF["quote"]
             assert self.rejected(askdir, answer(evidence=[evidence(CODE_REF, ref=ref, quote=quote)])), ref
 
+    def test_rejects_env_files_whatever_the_letter_case(self, askdir):
+        # 대소문자를 가리지 않는 파일 시스템에서는 .ENV.local이 .env.local을 연다.
+        ref = evidence(CODE_REF, ref=".ENV.local:1", quote="ANTHROPIC_API_KEY=placeholder")
+        code = ask(fake_claude(answer(evidence=[ref]), tracked=[".ENV.local", ".env.local"]))
+        assert code == 1 and "근거 검증 실패" in answer_file(askdir)
+
+    def test_rejects_files_the_repository_does_not_track(self, askdir):
+        (askdir / ".git").mkdir()
+        (askdir / ".git/config").write_text("[remote]\n\turl = https://example.com/repo.git\n", encoding="utf-8")
+        tracked = ["src/lib/upload/validate.ts", "docs/PRD.md"]
+        ref = evidence(CODE_REF, ref=".git/config:2", quote="url = https://example.com/repo.git")
+        assert ask(fake_claude(answer(evidence=[ref]), tracked=tracked)) == 1
+        assert "근거 검증 실패" in answer_file(askdir)
+        assert ask(fake_claude(tracked=tracked)) == 0
+
+    def test_rejects_every_answer_from_a_session_the_guard_did_not_arm(self, askdir):
+        # 설정 파일이 무시되어 훅이 돌지 않은 세션은 무엇을 조회했는지 알 수 없다.
+        assert ask(fake_claude()) == 0
+        assert ask(fake_claude(armed=False)) == 1
+        text = answer_file(askdir)
+        assert "근거 검증 실패" in text and "승인 대기" not in text
+        unknown = answer(verdict="unknown", evidence=[], unverified=["찾지 못함"])
+        assert ask(fake_claude(unknown, armed=False)) == 1
+
     def test_rejects_a_document_cited_as_code(self, askdir):
         assert self.rejected(askdir, answer(evidence=[evidence(DOC_REF, kind="code")]))
 
@@ -1259,6 +1319,13 @@ class TestAskEvidence:
         dict(verdict="escalate", evidence=[]),
         dict(verdict="escalate", evidence=[], escalation={"reason": "사유만 있음"}),
         dict(verdict="escalate", evidence=[], escalation={"needed_change": "  "}),
+        dict(verdict=["answer"]),
+        dict(verdict={"answer": True}),
+        dict(unverified="확인하지 못함"),
+        dict(unverified=3),
+        dict(unverified=[{"무엇": "환불"}]),
+        dict(evidence=[{**CODE_REF, "detail": {"a": 1}}]),
+        dict(verdict="escalate", evidence=[], escalation={"needed_change": "변경", "reason": ["사유"]}),
     ])
     def test_rejects_a_malformed_answer(self, askdir, change):
         assert self.rejected(askdir, answer(**change))
