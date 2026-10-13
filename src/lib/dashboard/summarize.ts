@@ -15,7 +15,10 @@ export function summarize(
     if (kind === "income") {
       totalIncome += amount;
     } else {
-      if (category === TRANSFER_CATEGORY) totalTransfer += amount;
+      if (category === TRANSFER_CATEGORY) {
+        totalTransfer += amount;
+        continue;
+      }
       totalExpense += amount;
       amounts.set(category, (amounts.get(category) ?? 0) + amount);
     }
