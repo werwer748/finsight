@@ -805,11 +805,18 @@ class TestHandoffStep:
 SCRIPT = Path(__file__).parent / "oncall.py"
 
 
+def staged_diff(repo):
+    # 전역 설정이 core.quotePath를 꺼 두었어도 git 기본값대로 한글 경로를 따옴표로 감싼다.
+    return subprocess.run(
+        ["git", "-c", "core.quotePath=true", "diff", "--cached", "HEAD"], cwd=repo, capture_output=True, text=True,
+    ).stdout
+
+
 def staged_patch(repo, rel, text):
     """파일 하나를 더한 패치를 git으로 만들고 저장소는 원래대로 돌려놓는다."""
     write(repo, rel, text)
     git(repo, "add", "-A")
-    patch_text = subprocess.run(["git", "diff", "--cached", "HEAD"], cwd=repo, capture_output=True, text=True).stdout
+    patch_text = staged_diff(repo)
     git(repo, "reset", "-q")
     (repo / rel).unlink()
     return patch_text
@@ -839,7 +846,8 @@ def run_real_publish(repo, tmp_path, patch_text):
     )
     body = (folder / "body.md").read_text(encoding="utf-8") if (folder / "body.md").exists() else ""
     pushed = subprocess.run(
-        ["git", "diff", "--name-only", "-z", sha, "oncall/ci-fix-111-1"], cwd=remote, capture_output=True, text=True,
+        ["git", "diff", "--name-only", "--no-renames", "-z", sha, "oncall/ci-fix-111-1"],
+        cwd=remote, capture_output=True, text=True,
     ).stdout
     return r.returncode, body, [path for path in pushed.split("\0") if path]
 
@@ -867,4 +875,20 @@ class TestPublishWithRealGit:
         code, body, pushed = run_real_publish(repo, tmp_path, patch_text)
         assert code == 0
         assert pushed == ["scripts/helper.py"]
+        assert "⚠️" in body
+
+    def test_warns_when_a_protected_file_is_moved_away(self, repo, tmp_path):
+        # 옮긴 뒤의 경로만 보면 scripts/ 밖이라 경고가 빠진다. 옛 경로도 봐야 한다.
+        write(repo, "scripts/guard.py", "print('x')\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "guard")
+        (repo / "tools").mkdir()
+        git(repo, "mv", "scripts/guard.py", "tools/guard.py")
+        patch_text = staged_diff(repo)
+        git(repo, "reset", "-q")
+        (repo / "tools/guard.py").rename(repo / "scripts/guard.py")
+
+        code, body, pushed = run_real_publish(repo, tmp_path, patch_text)
+        assert code == 0
+        assert sorted(pushed) == ["scripts/guard.py", "tools/guard.py"]
         assert "⚠️" in body
