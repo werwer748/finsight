@@ -8,7 +8,7 @@ src/
 │   └── ui/            # 공용 기본 컴포넌트 (Button, Input, Card)
 ├── types/             # TypeScript 타입 정의
 ├── lib/               # 유틸리티 + 헬퍼 (검증, 집계, Supabase 클라이언트)
-└── services/          # 외부 API 래퍼 (Claude, Polar)
+└── services/          # 외부 API 래퍼 (Claude, Polar, GitHub)
 supabase/
 └── migrations/        # DB 스키마와 RLS 정책 (SQL)
 ```
@@ -31,6 +31,9 @@ supabase/
        → DB 저장 → 코드로 집계 → 대시보드 렌더링
 
 결제:  업그레이드 버튼 → Polar 결제 페이지 → 웹훅 → DB의 플랜 갱신 → 서버에서 권한 체크
+
+장애:  PostHog error tracking alert → 웹훅(시크릿 검증 → event_id 선삽입 → workflow_dispatch)
+       → CI의 on-call 에이전트가 노이즈·신호 판정 → 신호면 GitHub Issue로 에스컬레이션
 ```
 
 ## 상태 관리
