@@ -1,0 +1,153 @@
+name: oncall-alert
+
+# PostHog error tracking alert를 받은 웹훅(src/app/api/oncall/posthog)이 깨운다.
+# 입력은 웹훅이 모양을 검사한 값이지만, 저장소에 쓰기 권한이 있으면 누구나 직접 넣어 실행할 수 있다.
+# 그래서 scripts/oncall_alert.py가 한 번 더 검사하고, 입력은 환경변수로만 스크립트에 넘긴다.
+on:
+  workflow_dispatch:
+    inputs:
+      event_id:
+        description: 웹훅이 만든 멱등 키 (종류:이슈 id:시각 해시)
+        required: true
+        type: string
+      kind:
+        description: alert 종류
+        required: true
+        type: choice
+        options: [created, reopened, spiking]
+      issue_id:
+        description: PostHog error tracking 이슈의 id
+        required: true
+        type: string
+
+# 같은 이슈의 alert는 한 번에 하나씩 처리한다. 동시에 돌면 둘 다 열린 Issue가 없다고 보고 Issue를 두 개 연다.
+# 대기 중인 실행은 하나만 남는다. 같은 이슈의 alert가 셋 이상 겹치면 가운데 것은 취소되고 다시 오지 않는다.
+# 마지막 실행이 같은 이슈를 그때의 자료로 판정하므로 그 손실은 받아들인다.
+concurrency:
+  group: oncall-alert-${{ inputs.issue_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # 시크릿이 아니다. 프로젝트 id는 PostHog 주소에 그대로 나온다.
+  POSTHOG_HOST: https://us.posthog.com
+  POSTHOG_PROJECT_ID: "660065"
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # 에이전트가 도는 job에는 읽기 권한만 준다. Issue는 publish가 올린다.
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      ready: ${{ steps.prepare.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # 기본 브랜치가 prod에 배포된 코드다. 에이전트가 오류 시점과 최근 변경을 맞춰 보도록 이력을 다 받는다.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare
+        id: prepare
+        env:
+          # 저장소 확인과 PostHog 조회를 하는 이 단계에만 준다.
+          GH_TOKEN: ${{ github.token }}
+          POSTHOG_PERSONAL_API_KEY: ${{ secrets.POSTHOG_PERSONAL_API_KEY }}
+          EVENT_ID: ${{ inputs.event_id }}
+          KIND: ${{ inputs.kind }}
+          ISSUE_ID: ${{ inputs.issue_id }}
+        # 기본 셸에는 pipefail이 없어 tee로 이으면 스크립트의 실패가 묻힌다.
+        shell: bash
+        run: |
+          python3 scripts/oncall_alert.py prepare --event-id "$EVENT_ID" --kind "$KIND" --issue-id "$ISSUE_ID" \
+            --output "$GITHUB_OUTPUT" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Install agent
+        if: steps.prepare.outputs.ready == 'true'
+        run: |
+          # 아래 Triage 단계의 CLAUDE_CODE_SUBPROCESS_ENV_SCRUB은 Linux에서 bubblewrap이 있어야 켜진다. 없으면 claude가 시작하지 않는다.
+          # socat이 없으면 claude는 시작하지만 세션 안의 셸 도구가 뜨지 않아 에이전트가 git 이력을 읽지 못한다.
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap socat
+          # ubuntu-24.04는 AppArmor가 권한 없는 사용자 네임스페이스를 막아 bubblewrap이 "Permission denied"로 죽는다.
+          # 러너는 한 번 쓰고 버리고 job 안에서 sudo가 되므로 이 제한을 풀어도 잃는 경계가 없다.
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          # 격리가 안 되는 러너에서는 에이전트를 띄우지 않고 여기서 멈춘다.
+          bwrap --unshare-pid --ro-bind / / --proc /proc --dev /dev true
+          npm install -g @anthropic-ai/claude-code
+      - name: Triage
+        if: steps.prepare.outputs.ready == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 에이전트가 읽는 예외 메시지와 스택은 누구나 PostHog에 보낼 수 있는 글이다.
+          # 그 글에 속아도 셸 도구와 훅이 띄우는 프로세스가 이 토큰을 보지 못하게 한다.
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: 1
+          # .claude/settings.json의 Stop 훅이 이 값을 보고 lint·build·test를 건너뛴다. 이 job은 의존성을 설치하지 않는다.
+          ONCALL_ALERT_ACTIVE: 1
+        # 저장소가 공개라 Actions 로그는 누구나 본다. 에이전트가 쓴 글은 로그에 찍지 않고 실행 정보만 남긴다.
+        # 허용한 도구는 판정과 보고서를 쓸 Write뿐이다. 프로젝트 안의 파일 읽기와 읽기 전용 명령은 규칙 없이도 된다.
+        run: |
+          timeout 12m claude -p "/oncall alert" --output-format json --permission-mode dontAsk \
+            --allowedTools Write \
+            < /dev/null > "$RUNNER_TEMP/agent.json" 2> "$RUNNER_TEMP/agent.err" || {
+              echo "::warning::on-call 에이전트가 오류로 끝났습니다. 판정이 없으면 publish가 신호로 올립니다."
+              # 시작하지 못한 이유를 알 수 있게 CLI의 오류 줄만 남긴다.
+              grep -a -i -m 5 '^error' "$RUNNER_TEMP/agent.err" | cut -c1-300 || true
+            }
+          jq -r '"on-call 에이전트: \(.subtype) · \(.num_turns)턴 · \(.duration_ms)ms"' "$RUNNER_TEMP/agent.json" || true
+      - name: Handoff
+        if: steps.prepare.outputs.ready == 'true'
+        run: |
+          # 에이전트가 남긴 두 파일만 넘긴다. 작업 폴더의 다른 변경은 이 job과 함께 버려진다.
+          mkdir -p "$RUNNER_TEMP/oncall-alert"
+          for name in verdict.json report.md; do
+            if [ -f ".oncall/$name" ]; then cp ".oncall/$name" "$RUNNER_TEMP/oncall-alert/$name"; fi
+          done
+      - uses: actions/upload-artifact@v7
+        if: steps.prepare.outputs.ready == 'true'
+        with:
+          name: oncall-alert
+          path: ${{ runner.temp }}/oncall-alert
+          # 에이전트가 아무것도 남기지 않았으면 publish가 판정 없음으로 다룬다.
+          if-no-files-found: ignore
+          # 공개 저장소의 artifact는 로그인한 누구나 받을 수 있다.
+          retention-days: 1
+
+  publish:
+    # triage가 실패해도 돈다. 판정이 없으면 신호(확신도 낮음)로 올려 사람이 보게 한다. 이미 올린 alert만 건너뛴다.
+    needs: triage
+    if: ${{ !cancelled() && needs.triage.outputs.ready != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Issue를 쓰는 토큰은 이 job에만 준다. 에이전트를 돌리지 않고, 넘겨받은 판정과 보고서는 데이터로만 다룬다.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        # triage가 실패했거나 에이전트가 아무것도 남기지 않았으면 artifact가 없다.
+        continue-on-error: true
+        with:
+          name: oncall-alert
+          path: ${{ runner.temp }}/oncall-alert
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # 이슈와 종류는 artifact가 아니라 워크플로우 입력에서 가져온다.
+          EVENT_ID: ${{ inputs.event_id }}
+          KIND: ${{ inputs.kind }}
+          ISSUE_ID: ${{ inputs.issue_id }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ASSIGNEE: ${{ github.repository_owner }}
+        # 판정과 보고서는 스크립트가 가린 뒤 출력한다. 기본 셸에는 pipefail이 없어 tee로 이으면 스크립트의 실패가 묻힌다.
+        shell: bash
+        run: |
+          python3 scripts/oncall_alert.py publish "$RUNNER_TEMP/oncall-alert" --event-id "$EVENT_ID" --kind "$KIND" \
+            --issue-id "$ISSUE_ID" --repo "$REPO" --run-id "$RUN_ID" --assignee "$ASSIGNEE" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -11,8 +11,9 @@
 | `bash_guard.py` | 셸 실행 전 훅. 되돌리기 어려운 명령어 패턴을 막는다. |
 | `review_gate.py` | `/review-code` 스킬을 헤드리스로 돌리고 판정에 따라 커밋·PR을 막는다. PR에서는 자동 머지·직접 판단·닫기도 정한다. pre-commit 훅과 GitHub Action이 같이 쓴다. |
 | `oncall.py` | `/oncall` 스킬의 앞뒤 단계. `prepare`는 깨어나도 되는 실패인지 확인하고 실패한 job의 로그를 가려서 준비한다. `publish`는 에이전트가 넘긴 보고와 패치로 수정 PR을 연다. 이 둘은 GitHub Action이 쓴다. `ask`는 질문 하나를 읽기 전용 세션에 넘기고 돌아온 답의 근거를 검사해 초안으로 남긴다. 사람이 로컬에서 실행한다. |
+| `oncall_alert.py` | prod 오류 alert를 판정하는 `/oncall alert` 스킬의 앞뒤 단계. `prepare`는 이미 올린 alert인지 저장소에서 확인하고 PostHog 자료를 가려서 준비한다. `publish`는 에이전트가 넘긴 판정대로 기록만 남기거나 Issue를 올린다. GitHub Action이 쓴다. |
 | `ask_guard.py` | MCP 호출 전 훅이자 세션 시작 훅. `/oncall ask` 세션에서 허용 목록에 든 DB 쿼리와 PostHog 읽기만 통과시키고 결정을 기록한다. 세션이 시작될 때 가드가 켜졌다는 `armed` 줄도 남긴다. 다른 세션에서는 아무것도 하지 않는다. |
-| `test_*.py` | 위 여섯 파일의 pytest 테스트. |
+| `test_*.py` | 위 일곱 파일의 pytest 테스트. |
 
 ## 명령어
 
@@ -21,6 +22,7 @@ python3 scripts/execute.py <phase-dir> [--push]   # phase 실행
 python3 scripts/review_gate.py --staged           # staged 변경 리뷰 (pre-commit 훅이 실행)
 python3 scripts/oncall.py prepare <run-id>        # 실패한 CI job의 로그 준비 (oncall job이 실행)
 python3 scripts/oncall.py ask --audience user "<질문>"   # 질문에 근거로 답한 초안 쓰기 (로컬에서 실행)
+python3 scripts/oncall_alert.py prepare --event-id <id> --kind <종류> --issue-id <uuid>   # alert 자료 준비 (triage job이 실행)
 python3 -m pytest scripts                         # 테스트
 ```
 
@@ -66,6 +68,20 @@ python3 -m pytest scripts                         # 테스트
 - `has_secret`에는 접두사가 뚜렷한 패턴만 둔다. `이름=값` 규칙(`ASSIGNMENT`)을 넣으면 `token_hash=` 같은 평범한 코드에 걸려 인증 코드를 고친 패치를 열 수 없다.
 - `ONCALL_ACTIVE=1`이면 `tdd_guard.py`가 통과시킨다. 워크플로우가 on-call 세션에 세운다. 실패한 CI가 테스트 선행을 대신한다고 보기 때문이다.
 - on-call PR은 `GITHUB_TOKEN`으로 열기 때문에 저장소 설정 "Allow GitHub Actions to create and approve pull requests"가 켜져 있어야 한다. 꺼져 있으면 `publish`가 올린 브랜치를 지우고 실패한다.
+- `oncall_alert.py`는 `.github/workflows/oncall-alert.yml`의 `triage`와 `publish` job이 실행한다. 순서는 웹훅(`src/app/api/oncall/posthog`) → `workflow_dispatch` → `prepare` → `claude -p "/oncall alert"` → `publish`다. 웹훅은 시크릿 검증, `event_id` 선삽입, dispatch만 하고 판정은 하지 않는다.
+- 멱등은 두 겹이다. 웹훅은 `oncall_events` 테이블에 `event_id`를 먼저 삽입해 PostHog의 재전송을 걸러낸다. `oncall_alert.py`는 GitHub Issue를 저장소로 쓴다. Issue 본문의 `<!-- oncall-issue:<이슈 id> -->`로 열려 있는 에스컬레이션을 찾고, 본문과 댓글의 `<!-- oncall-event:<event_id> -->`로 이미 올린 alert를 알아본다. `prepare`와 `publish`가 둘 다 쓰기 전에 확인하므로 같은 실행을 다시 돌려도 두 번 올라가지 않는다. 표식의 모양을 바꾸면 그 전에 올린 Issue를 알아보지 못한다.
+- 에스컬레이션은 `oncall` 라벨이 붙은 열린 Issue에서만 찾는다. 라벨은 저장소에 쓰기 권한이 있어야 붙일 수 있다. 본문의 표식만 보면 누구나 Issue를 열어 에스컬레이션을 가로챌 수 있다. 닫힌 Issue는 보지 않으므로 닫은 뒤 다시 오는 alert는 새 Issue가 된다.
+- 워크플로우의 `concurrency`가 같은 PostHog 이슈의 실행을 한 번에 하나로 묶는다. 동시에 돌면 둘 다 열린 Issue가 없다고 보고 Issue를 두 개 연다. 대기 중인 실행은 하나만 남으므로 같은 이슈의 alert가 셋 이상 몰리면 가운데 것은 취소된다.
+- `event_id`는 `종류:이슈 id:시각 해시`다. PostHog가 alert마다 고유 id를 주지 않아 웹훅(`src/lib/oncall/alert.ts`)이 만든다. `check_ids`가 같은 모양을 다시 검사한다. 워크플로우 입력은 저장소에 쓰기 권한이 있으면 누구나 직접 넣을 수 있고, 이 값들이 HogQL 쿼리와 jq 필터와 Issue 본문에 그대로 들어가기 때문이다. 웹훅 쪽 모양을 바꾸면 `check_ids`도 고친다.
+- 에이전트가 읽는 예외 메시지와 스택은 누구나 PostHog에 보낼 수 있는 글이다(프로젝트 토큰이 공개다). 그래서 `triage` job에는 읽기 권한만 주고, 에이전트 단계에는 `GH_TOKEN`도 PostHog 키도 주지 않고, 허용 도구는 `Write`뿐이다. 그 job이 내놓은 판정과 보고서는 `publish` job이 데이터로만 다룬다. Issue의 제목, 라벨, 담당자는 워크플로우 입력과 `github.*`에서 온 값으로만 만든다.
+- 저장소가 공개라 Issue와 실행 요약은 누구나 본다. 가리기는 두 번 한다. `scrub`은 에이전트에게 주기 전에 PostHog에서 온 글의 시크릿, 이메일, URL 쿼리, 숫자 4개 이상이 든 구간을 가린다. `publicize`는 에이전트가 쓴 글의 시크릿과 이메일을 가리고 멘션이 알림을 보내지 않게 한다. 건수와 `파일:줄`이 남아야 하므로 `publicize`는 숫자를 가리지 않는다. 프레임의 `junk_drawer`에는 빌드한 기기의 경로가 들어 있어 `_sample`이 버린다.
+- 판정이 없으면 신호로 올린다. `read_verdict`는 `verdict.json`이 없거나 읽을 수 없으면 신호(확신도 낮음)로 보고, 확신도가 낮은 노이즈도 신호로 바꾼다. 워크플로우의 `publish` job은 `triage`가 실패해도 돈다. 이미 올린 alert(`ready=false`)만 건너뛴다. PostHog 조회가 실패해도 `prepare`는 자료 없이 에이전트에게 넘긴다. `prepare`가 저장소를 읽지 못하면 실패하고, 그 실행도 `publish`가 신호로 올린다.
+- 노이즈의 기록은 Actions 실행 요약뿐이다. Issue도 DB 행도 남기지 않는다. 실행 기록의 보관 기간이 지나면 사라진다.
+- `ONCALL_ALERT_ACTIVE=1`이면 `.claude/settings.json`의 Stop 훅이 lint·build·test를 건너뛴다. 워크플로우가 alert 세션에 세운다. `triage` job은 의존성을 설치하지 않아서, 훅이 돌면 lint부터 실패해 에이전트가 한 턴을 낭비한다.
+- 웹훅이 workflow_dispatch에 쓰는 토큰(`ONCALL_GITHUB_TOKEN`)은 이 저장소의 Actions 쓰기 권한만 있는 fine-grained PAT다. `repository_dispatch`는 Contents 쓰기 권한이 필요해서 쓰지 않는다. 워크플로우 파일 이름은 `src/services/github.ts`의 `ONCALL_WORKFLOW`와 같아야 하고 `test_oncall_alert.py`가 확인한다.
+- alert 흐름이 돌려면 설정이 네 곳에 있어야 한다. 배포 환경변수 `ONCALL_WEBHOOK_SECRET`, `ONCALL_GITHUB_TOKEN`, `ONCALL_GITHUB_REPOSITORY`, `SUPABASE_SECRET_KEY`. GitHub 시크릿 `POSTHOG_PERSONAL_API_KEY`(읽기 전용. `query:read`로 충분한지는 확인하지 않았다). Supabase의 `oncall_events` 마이그레이션. PostHog의 alert 셋(헤더와 본문은 `.claude/skills/oncall/alert.md`의 "호출 방법"). PostHog 호스트와 프로젝트 id는 워크플로우 파일의 `env`에 있다.
+- alert가 한꺼번에 많이 오면 그 수만큼 실행이 생긴다. 서로 다른 이슈의 alert에는 상한이 없다. 잘못된 배포로 새 이슈가 수십 개 생기면 에이전트 세션도 수십 번 돈다. 아직 막지 않았다.
+- `oncall_alert.py`의 HTTP 호출(`_posthog`)과 실제 PostHog 응답 모양은 이 저장소에서 키를 넣고 돌려 본 적이 없다. 쿼리 문장은 MCP로 실제 프로젝트에 돌려 확인했다. `exception_timestamp`가 세 alert 모두에 오는지, PostHog가 200이 아닌 응답에 다시 보내는지도 실제 alert로 확인하지 않았다.
 - Codex는 루트에서 실행 폴더까지의 `AGENTS.md`만 자동으로 읽는다. 저장소 루트에서 실행한 세션은 이 파일을 자동으로 읽지 않는다.
 - `oncall.py ask`는 `claude -p "/oncall ask"`를 읽기 전용으로 띄운다. 순서는 질문 가리기와 `.oncall/ask/question.json` 쓰기 → 세션 → 근거 검사 → `.oncall/ask/answer.md`다. 답을 보내는 코드는 없다. 사용자에게 가는 글은 사람이 `answer.md`를 읽고 승인한 뒤 직접 보낸다.
 - ask 세션에는 `Bash`를 통째로 막는다(`ASK_DENIED`). 읽기 전용 셸 명령은 `dontAsk`에서 규칙 없이 실행되고 `Read` 거부 규칙은 `cat .env.local`을 막지 못하기 때문이다. 코드는 Read·Grep·Glob으로만 읽는다. 더 여는 도구는 MCP 둘(`ASK_ALLOWED`)뿐이다.

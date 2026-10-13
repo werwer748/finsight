@@ -1364,8 +1364,8 @@ def skill_text(name):
 class TestSkillLayout:
     def test_router_points_each_kind_to_its_file(self):
         text = skill_text("SKILL.md")
-        assert 'argument-hint: "ci | ask"' in text
-        for kind in ("ci", "ask"):
+        assert 'argument-hint: "ci | alert | ask"' in text
+        for kind in ("ci", "alert", "ask"):
             # 헤드리스 세션이 찾아 읽을 수 있게 저장소 루트 기준 경로로 적는다.
             assert f"`.claude/skills/oncall/{kind}.md`" in text
             assert (SKILL_DIR / f"{kind}.md").is_file()
@@ -1373,7 +1373,7 @@ class TestSkillLayout:
     def test_router_carries_no_rule_of_a_single_kind(self):
         # 고치는 종류와 아무것도 바꾸지 않는 종류의 규칙이 한 세션에 함께 들어가면 안 된다.
         text = skill_text("SKILL.md")
-        for phrase in ("failed.log", "report.md", "question.json", "tdd_guard", "npm run"):
+        for phrase in ("failed.log", "report.md", "alert.json", "verdict.json", "question.json", "tdd_guard", "npm run"):
             assert phrase not in text
 
     @pytest.mark.parametrize("phrase", [
