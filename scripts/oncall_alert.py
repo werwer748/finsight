@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -49,6 +50,8 @@ MAX_FRAMES = 30
 SAMPLES = 3
 # PostHog의 504 한 번에 자료 없이 판정해 노이즈가 Issue로 올라간 적이 있다. 다시 보내기 전에 기다리는 초.
 POSTHOG_RETRY_WAITS = (2, 5)
+# PostHog 조회 전체에 쓰는 초. triage job의 제한(20분)에서 에이전트 몫(12분)을 빼고 남는 시간 안에 끝낸다.
+POSTHOG_BUDGET = 300
 
 # 쿼리에 넣는 값은 check_ids를 통과한 이슈 id뿐이다. events를 읽는 쿼리는 모두 기간을 건다.
 EXCEPTIONS = "FROM events WHERE event = '$exception' AND issue_id = '{issue_id}' AND timestamp >= now() - INTERVAL {days} DAY"
@@ -136,11 +139,13 @@ def _passing(error: Exception) -> bool:
     """다시 보내면 될 수 있는 실패인지 본다. 429를 뺀 4xx는 키나 쿼리가 틀린 것이라 다시 보내도 같다."""
     if isinstance(error, urllib.error.HTTPError):
         return error.code >= 500 or error.code == 429
-    return isinstance(error, OSError)
+    return isinstance(error, (OSError, http.client.HTTPException))
 
 
-def _posthog(sql: str) -> List[dict]:
-    """HogQL 쿼리 하나를 실행해 행을 {열: 값}으로 돌려준다. 지나가는 실패는 두 번까지 다시 보낸다."""
+def _posthog(sql: str, deadline: float) -> List[dict]:
+    """HogQL 쿼리 하나를 실행해 행을 {열: 값}으로 돌려준다. 지나가는 실패는 두 번까지 다시 보낸다.
+
+    deadline(time.monotonic 기준)이 지나면 보내지 않고 던진다."""
     names = ("POSTHOG_HOST", "POSTHOG_PROJECT_ID", "POSTHOG_PERSONAL_API_KEY")
     host, project, key = (os.environ.get(name, "") for name in names)
     missing = [name for name in names if not os.environ.get(name)]
@@ -153,11 +158,15 @@ def _posthog(sql: str) -> List[dict]:
     )
     waits = list(POSTHOG_RETRY_WAITS)
     while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise OncallError("PostHog 조회 실패: 정해 둔 시간을 다 썼습니다.")
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with urllib.request.urlopen(request, timeout=min(60, left)) as response:
                 data = json.load(response)
             return [dict(zip(data["columns"], row)) for row in data["results"]]
-        except (OSError, ValueError, KeyError, TypeError) as e:
+        # IncompleteRead처럼 응답이 중간에 끊겨 나는 오류는 OSError가 아니다.
+        except (OSError, http.client.HTTPException, ValueError, KeyError, TypeError) as e:
             if not waits or not _passing(e):
                 raise OncallError(f"PostHog 조회 실패: {redact(str(e))}")
             time.sleep(waits.pop(0))
@@ -205,19 +214,21 @@ def _sample(row: dict) -> dict:
 
 def collect(issue_id: str) -> dict:
     """PostHog에서 이슈 하나의 자료를 모은다. 숫자는 전부 여기서 쿼리로 계산하고 에이전트는 옮겨 적기만 한다."""
-    issue = _posthog(ISSUE_QUERY.format(issue_id=issue_id))
-    stats = _posthog(STATS_QUERY.format(issue_id=issue_id, days=30))
+    # 쿼리마다 다시 보낼 수 있으므로 마감은 쿼리 하나가 아니라 조회 전체에 건다.
+    deadline = time.monotonic() + POSTHOG_BUDGET
+    issue = _posthog(ISSUE_QUERY.format(issue_id=issue_id), deadline)
+    stats = _posthog(STATS_QUERY.format(issue_id=issue_id, days=30), deadline)
     return {
         # 이름과 설명은 예외 메시지에서 온다.
         "issue": dict(issue[0], name=_text(issue[0].get("name")), description=_text(issue[0].get("description"))) if issue else None,
         "stats": stats[0] if stats else None,
-        "timeline": _posthog(TIMELINE_QUERY.format(issue_id=issue_id, days=2)),
+        "timeline": _posthog(TIMELINE_QUERY.format(issue_id=issue_id, days=2), deadline),
         "breakdowns": {
             name: [dict(row, value=_text(row.get("value"))) for row in
-                   _posthog(BREAKDOWN_QUERY.format(prop=prop, issue_id=issue_id, days=7))]
+                   _posthog(BREAKDOWN_QUERY.format(prop=prop, issue_id=issue_id, days=7), deadline)]
             for name, prop in BREAKDOWNS.items()
         },
-        "samples": [_sample(row) for row in _posthog(SAMPLE_QUERY.format(issue_id=issue_id, days=30))],
+        "samples": [_sample(row) for row in _posthog(SAMPLE_QUERY.format(issue_id=issue_id, days=30), deadline)],
     }
 
 
