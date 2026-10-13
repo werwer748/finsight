@@ -132,13 +132,12 @@ jobs:
           # 아래 Fix 단계의 CLAUDE_CODE_SUBPROCESS_ENV_SCRUB은 Linux에서 bubblewrap이 있어야 켜진다. 없으면 claude가 시작하지 않는다.
           sudo apt-get update -q
           sudo apt-get install -y -q bubblewrap
+          # ubuntu-24.04는 AppArmor가 권한 없는 사용자 네임스페이스를 막아 bubblewrap이 "Permission denied"로 죽는다.
+          # 러너는 한 번 쓰고 버리고 job 안에서 sudo가 되므로 이 제한을 풀어도 잃는 경계가 없다.
+          sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          # 격리가 안 되는 러너에서는 에이전트를 띄우지 않고 여기서 멈춘다.
+          bwrap --unshare-pid --ro-bind / / --proc /proc --dev /dev true
           npm install -g @anthropic-ai/claude-code
-      - name: Probe bubblewrap (e2e only)
-        if: steps.reproduce.outputs.failed == 'true'
-        run: |
-          sysctl kernel.apparmor_restrict_unprivileged_userns || true
-          bwrap --version
-          bwrap --unshare-pid --ro-bind / / --proc /proc --dev /dev sh -c 'echo "inside pid ns: $(ls /proc | grep -c "^[0-9]") processes visible"'
       - name: Fix
         if: steps.reproduce.outputs.failed == 'true'
         env:

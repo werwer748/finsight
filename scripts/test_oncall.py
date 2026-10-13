@@ -602,6 +602,10 @@ class TestWorkflow:
         agent = next(i for i, step in enumerate(all_steps) if "claude -p" in step)
         assert install < agent
         assert "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: 1" in all_steps[agent]
+        # ubuntu-24.04 러너는 AppArmor가 사용자 네임스페이스를 막아 bubblewrap이 "Permission denied"로 죽는다.
+        # 제한을 풀고, 에이전트를 띄우기 전에 실제로 동작하는지 확인한다.
+        assert "kernel.apparmor_restrict_unprivileged_userns=0" in all_steps[install]
+        assert "\n          bwrap --unshare-pid " in all_steps[install]
 
     def test_agent_startup_errors_reach_the_log(self):
         # stderr를 버리면 claude가 시작하지 못한 이유를 알 수 없다.
