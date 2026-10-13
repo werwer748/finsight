@@ -11,7 +11,7 @@
 | `bash_guard.py` | 셸 실행 전 훅. 되돌리기 어려운 명령어 패턴을 막는다. |
 | `review_gate.py` | `/review-code` 스킬을 헤드리스로 돌리고 판정에 따라 커밋·PR을 막는다. PR에서는 자동 머지·직접 판단·닫기도 정한다. pre-commit 훅과 GitHub Action이 같이 쓴다. |
 | `oncall.py` | `/oncall` 스킬의 앞뒤 단계. `prepare`는 깨어나도 되는 실패인지 확인하고 실패한 job의 로그를 가려서 준비한다. `publish`는 에이전트가 넘긴 보고와 패치로 수정 PR을 연다. 이 둘은 GitHub Action이 쓴다. `ask`는 질문 하나를 읽기 전용 세션에 넘기고 돌아온 답의 근거를 검사해 초안으로 남긴다. 사람이 로컬에서 실행한다. |
-| `ask_guard.py` | MCP 호출 전 훅. `/oncall ask` 세션에서 허용 목록에 든 DB 쿼리와 PostHog 읽기만 통과시키고 결정을 기록한다. 다른 세션에서는 아무것도 하지 않는다. |
+| `ask_guard.py` | MCP 호출 전 훅이자 세션 시작 훅. `/oncall ask` 세션에서 허용 목록에 든 DB 쿼리와 PostHog 읽기만 통과시키고 결정을 기록한다. 세션이 시작될 때 가드가 켜졌다는 `armed` 줄도 남긴다. 다른 세션에서는 아무것도 하지 않는다. |
 | `test_*.py` | 위 여섯 파일의 pytest 테스트. |
 
 ## 명령어

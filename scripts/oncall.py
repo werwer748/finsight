@@ -116,7 +116,8 @@ ASK_SCHEMA = {
 # 경계는 \b가 아니라 숫자로 본다. 한글은 \w라서 "3456인데"의 숫자와 조사 사이에는 낱말 경계가 없다.
 LONG_DIGITS = re.compile(r"\d(?:-?\d){9,}|(?<!\d)\d{4}(?: \d{4}){3}(?!\d)")
 # 같은 이유로 ASCII 글자만 본다. \w로 쓰면 주소 뒤에 붙은 조사까지 가린다.
-EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+# 마지막 마디가 글자로 시작할 때만 이메일로 본다. next@16.0.3 같은 패키지 버전은 남긴다.
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z][A-Za-z0-9-]*")
 FILE_REF = re.compile(r"(.+):(\d+)(?:-(\d+))?")
 # 한두 글자짜리 인용은 어느 줄에나 있다.
 QUOTE_MIN = 8
@@ -536,7 +537,9 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
     problems, confirmed = check_answer(answer, args.audience, _read(ASK_DIR / "guard.log").splitlines(), tracked)
     # 인용은 파일의 글과 대조하므로 가리기는 검사 뒤에 한다.
-    text = redact(render_answer(question, answer, args.audience, user_id, problems, confirmed))
+    text = render_answer(question, answer, args.audience, user_id, problems, confirmed)
+    # 모델이 쓴 값의 백스페이스와 ESC가 터미널에서 인용 표시나 상태 줄을 덮어쓰지 못하게 뗀다.
+    text = redact(CONTROL.sub("", ANSI.sub("", text)))
     (ASK_DIR / "answer.md").write_text(text, encoding="utf-8")
     print(text, end="")
     if problems:
